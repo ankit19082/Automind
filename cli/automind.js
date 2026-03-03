@@ -221,38 +221,20 @@ program
     let commitMessage = "";
 
     // Try Ollama (KiloCode) first
-    if (process.env.OLLAMA_API_BASE || true) {
-      try {
-        const openai = new OpenAI({
-          apiKey: "ollama", // API key is not required for local Ollama, but the SDK requires a string
-          baseURL: "http://127.0.0.1:11434/v1",
-        });
-        const trimmedDiff =
-          diff.length > 8000
-            ? diff.substring(0, 8000) + "\n...(truncated)"
-            : diff;
+    try {
+      const trimmedDiff =
+        diff.length > 8000
+          ? diff.substring(0, 8000) + "\n...(truncated)"
+          : diff;
 
-        const res = await openai.chat.completions.create({
-          model: "qwen2.5", // Using the model the user just pulled
-          messages: [
-            {
-              role: "system",
-              content:
-                "You are an expert developer analyzing a git diff. First, mentally review the changes file-by-file to understand exactly what type of change was made in each file. " +
-                "Then, generate a concise git commit message based on your analysis. " +
-                "Use Conventional Commits format (feat:, fix:, chore:, refactor:, docs:, style:, test:). " +
-                "First line: a short summary (max 72 chars) using the appropriate type prefix. Then a blank line. Then 2-4 bullet points describing the specific changes made, grouping them logically if possible. " +
-                "Respond with ONLY the final commit message, with no extra explanation or reasoning.",
-            },
-            { role: "user", content: trimmedDiff },
-          ],
-        });
-        commitMessage = res.choices[0].message.content.trim();
-      } catch (e) {
-        console.warn(
-          `⚠️  OpenAI error, using smart fallback: ${e.message.split("\n")[0]}`,
-        );
-      }
+      commitMessage = await generateAIResponse(
+        "You are an expert developer analyzing a git diff. First, mentally review the changes file-by-file to understand exactly what type of change was made in each file. Then, generate a concise git commit message based on your analysis. Use Conventional Commits format (feat:, fix:, chore:, refactor:, docs:, style:, test:). First line: a short summary (max 72 chars) using the appropriate type prefix. Then a blank line. Then 2-4 bullet points describing the specific changes made, grouping them logically if possible. Respond with ONLY the final commit message, with no extra explanation or reasoning.",
+        trimmedDiff,
+      );
+    } catch (e) {
+      console.warn(
+        `⚠️  AI error, using smart fallback: ${e.message.split("\n")[0]}`,
+      );
     }
 
     // Smart fallback: parse the actual diff content
@@ -354,37 +336,20 @@ program
         let slackSummary = commitMessage; // fallback
 
         // Generate full summary for slack using Ollama
-        if (process.env.OLLAMA_API_BASE || true) {
-          try {
-            const openai = new OpenAI({
-              apiKey: "ollama",
-              baseURL:
-                process.env.OLLAMA_API_BASE || "http://127.0.0.1:11434/v1",
-            });
+        try {
+          const trimmedDiff =
+            diff.length > 8000
+              ? diff.substring(0, 8000) + "\n...(truncated)"
+              : diff;
 
-            const trimmedDiff =
-              diff.length > 8000
-                ? diff.substring(0, 8000) + "\n...(truncated)"
-                : diff;
-
-            const res = await openai.chat.completions.create({
-              model: "qwen2.5",
-              messages: [
-                {
-                  role: "system",
-                  content:
-                    "You are an expert developer. Based on the provided git diff, generate a detailed summary of the changes made, suitable for a Slack notification or Pull Request description. " +
-                    "Explain WHAT changed and WHY, in a readable, bulleted format. Do not include raw code or the actual git diff formatting, just the higher-level explanation. Keep it concise but descriptive.",
-                },
-                { role: "user", content: trimmedDiff },
-              ],
-            });
-            slackSummary = res.choices[0].message.content.trim();
-          } catch (e) {
-            console.warn(
-              `⚠️  Failed to generate detailed summary for Slack: ${e.message.split("\n")[0]}`,
-            );
-          }
+          slackSummary = await generateAIResponse(
+            "You are an expert developer. Based on the provided git diff, generate a detailed summary of the changes made, suitable for a Slack notification or Pull Request description. Explain WHAT changed and WHY, in a readable, bulleted format. Do not include raw code or the actual git diff formatting, just the higher-level explanation. Keep it concise but descriptive.",
+            trimmedDiff,
+          );
+        } catch (e) {
+          console.warn(
+            `⚠️  Failed to generate detailed summary for Slack: ${e.message.split("\n")[0]}`,
+          );
         }
 
         console.log("\n💬 Slack Summary Preview:\n");
@@ -668,14 +633,10 @@ async function handleJiraUpdate({ commitMessage, branch, slackSummary }) {
 
     let newStatus = "In Progress";
 
-    if (process.env.OLLAMA_API_BASE || true) {
+    try {
       console.log(
         "🧠 Analyzing work against Jira story to determine status...",
       );
-      const openai = new OpenAI({
-        apiKey: "ollama",
-        baseURL: process.env.OLLAMA_API_BASE || "http://127.0.0.1:11434/v1",
-      });
 
       const prompt = `You are a project manager. Consider the following Jira ticket:
 Title: ${ticketDetails.title}
@@ -687,17 +648,15 @@ ${slackSummary}
 Based on this work, is the Jira ticket completely 'Done' or just 'In Progress'? 
 Reply with EXACTLY the word "Done" or "In Progress" and nothing else.`;
 
-      const res = await openai.chat.completions.create({
-        model: "qwen2.5",
-        messages: [{ role: "user", content: prompt }],
-      });
+      const decision = await generateAIResponse("", prompt);
 
-      const decision = res.choices[0].message.content.trim();
       if (decision.includes("Done")) {
         newStatus = "Done";
       } else if (decision.includes("In Progress")) {
         newStatus = "In Progress";
       }
+    } catch (e) {
+      console.warn(`⚠️  AI analysis failed: ${e.message.split("\n")[0]}`);
     }
 
     console.log(`📝 Recommended new status: ${newStatus}\n`);
@@ -731,6 +690,29 @@ Reply with EXACTLY the word "Done" or "In Progress" and nothing else.`;
   } catch (e) {
     console.warn(`⚠️  Failed to process Jira update: ${e.message}\n`);
   }
+}
+
+/**
+ * Common helper to generate responses from the configured AI provider
+ */
+async function generateAIResponse(systemPrompt, userPrompt) {
+  const openai = new OpenAI({
+    apiKey: "ollama",
+    baseURL: process.env.OLLAMA_API_BASE || "http://127.0.0.1:11434/v1",
+  });
+
+  const messages = [];
+  if (systemPrompt) {
+    messages.push({ role: "system", content: systemPrompt });
+  }
+  messages.push({ role: "user", content: userPrompt });
+
+  const res = await openai.chat.completions.create({
+    model: "qwen2.5",
+    messages: messages,
+  });
+
+  return res.choices[0].message.content.trim();
 }
 
 program.parse();
