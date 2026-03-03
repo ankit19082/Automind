@@ -308,71 +308,100 @@ program
 
     // 8. Slack notification
     if (opts.slack !== false) {
-      console.log("🧠 Generating detailed summary for Slack...");
-      let slackSummary = commitMessage; // fallback
-
-      // Generate full summary for slack using Ollama
-      if (process.env.OLLAMA_API_BASE || true) {
-        try {
-          const openai = new OpenAI({
-            apiKey: "ollama",
-            baseURL: process.env.OLLAMA_API_BASE || "http://127.0.0.1:11434/v1",
-          });
-
-          const trimmedDiff =
-            diff.length > 8000
-              ? diff.substring(0, 8000) + "\n...(truncated)"
-              : diff;
-
-          const res = await openai.chat.completions.create({
-            model: "qwen2.5",
-            messages: [
-              {
-                role: "system",
-                content:
-                  "You are an expert developer. Based on the provided git diff, generate a detailed summary of the changes made, suitable for a Slack notification or Pull Request description. " +
-                  "Explain WHAT changed and WHY, in a readable, bulleted format. Do not include raw code or the actual git diff formatting, just the higher-level explanation. Keep it concise but descriptive.",
-              },
-              { role: "user", content: trimmedDiff },
-            ],
-          });
-          slackSummary = res.choices[0].message.content.trim();
-        } catch (e) {
-          console.warn(
-            `⚠️  Failed to generate detailed summary for Slack: ${e.message.split("\n")[0]}`,
-          );
-        }
-      }
-
-      console.log("\n💬 Slack Summary Preview:\n");
-      console.log("   " + slackSummary.replace(/\n/g, "\n   "));
-      console.log("");
-
-      const rl2 = readline.createInterface({
+      const rlSlackPrompt = readline.createInterface({
         input: process.stdin,
         output: process.stdout,
       });
 
-      const sendSlackAnswer = await new Promise((resolve) =>
-        rl2.question(
-          "❓ Do you want to send this summary to Slack? (y/N) ",
+      const generateSlackAnswer = await new Promise((resolve) =>
+        rlSlackPrompt.question(
+          "\n❓ Do you want to generate a detailed summary for Slack using AI? (y/N) ",
           resolve,
         ),
       );
-      rl2.close();
+      rlSlackPrompt.close();
 
       if (
-        sendSlackAnswer.trim().toLowerCase() === "y" ||
-        sendSlackAnswer.trim().toLowerCase() === "yes"
+        generateSlackAnswer.trim().toLowerCase() === "y" ||
+        generateSlackAnswer.trim().toLowerCase() === "yes"
       ) {
-        await sendSlackPushNotification({
-          slackSummary,
-          commitHash,
-          branch,
-          statusLines,
+        console.log("🧠 Generating detailed summary for Slack...");
+        let slackSummary = commitMessage; // fallback
+
+        // Generate full summary for slack using Ollama
+        if (process.env.OLLAMA_API_BASE || true) {
+          try {
+            const openai = new OpenAI({
+              apiKey: "ollama",
+              baseURL:
+                process.env.OLLAMA_API_BASE || "http://127.0.0.1:11434/v1",
+            });
+
+            const trimmedDiff =
+              diff.length > 8000
+                ? diff.substring(0, 8000) + "\n...(truncated)"
+                : diff;
+
+            const res = await openai.chat.completions.create({
+              model: "qwen2.5",
+              messages: [
+                {
+                  role: "system",
+                  content:
+                    "You are an expert developer. Based on the provided git diff, generate a detailed summary of the changes made, suitable for a Slack notification or Pull Request description. " +
+                    "Explain WHAT changed and WHY, in a readable, bulleted format. Do not include raw code or the actual git diff formatting, just the higher-level explanation. Keep it concise but descriptive.",
+                },
+                { role: "user", content: trimmedDiff },
+              ],
+            });
+            slackSummary = res.choices[0].message.content.trim();
+          } catch (e) {
+            console.warn(
+              `⚠️  Failed to generate detailed summary for Slack: ${e.message.split("\n")[0]}`,
+            );
+          }
+        }
+
+        console.log("\n💬 Slack Summary Preview:\n");
+        console.log("   " + slackSummary.replace(/\n/g, "\n   "));
+        console.log("");
+
+        const rl2 = readline.createInterface({
+          input: process.stdin,
+          output: process.stdout,
         });
+
+        const sendSlackAnswer = await new Promise((resolve) =>
+          rl2.question(
+            "❓ Do you want to send this summary to Slack? (y/N) ",
+            resolve,
+          ),
+        );
+        rl2.close();
+
+        if (
+          sendSlackAnswer.trim().toLowerCase() === "y" ||
+          sendSlackAnswer.trim().toLowerCase() === "yes"
+        ) {
+          await sendSlackPushNotification({
+            slackSummary,
+            commitHash,
+            branch,
+            statusLines,
+          });
+        } else {
+          console.log("\n🚫 Slack notification skipped.\n");
+        }
+
+        await handleJiraUpdate({ commitMessage, branch, slackSummary });
       } else {
-        console.log("\n🚫 Slack notification skipped.\n");
+        console.log("\n🚫 Slack summary generation skipped.\n");
+        // Still check Jira even if Slack is skipped, using standard commit message
+        await handleJiraUpdate({
+          commitMessage,
+          branch,
+          slackSummary: commitMessage,
+        });
       }
     }
   });
@@ -586,6 +615,97 @@ function streamLogs(jobId) {
     .on("error", (e) =>
       console.error(`\n❌ Cannot connect to log stream: ${e.message}`),
     );
+}
+
+/**
+ * Automates Jira status mapping
+ */
+async function handleJiraUpdate({ commitMessage, branch, slackSummary }) {
+  console.log("\n🧠 Checking for Jira tickets to update...");
+
+  // Try to find PROJ-123 in branch or commitMessage
+  const textToSearch = [branch, commitMessage].filter(Boolean).join(" ");
+  const jiraMatch = textToSearch.match(/[A-Z]+-\d+/i);
+
+  if (!jiraMatch) {
+    console.log(
+      "ℹ️  No Jira ticket ID found in branch name or commit message.\n",
+    );
+    return;
+  }
+
+  const ticketId = jiraMatch[0].toUpperCase();
+  console.log(`🔗 Found Jira ticket: ${ticketId}`);
+
+  try {
+    const ticketDetails = await getJiraTicket(ticketId);
+    console.log(`📋 Ticket Title: ${ticketDetails.title}`);
+
+    let newStatus = "In Progress";
+
+    if (process.env.OLLAMA_API_BASE || true) {
+      console.log(
+        "🧠 Analyzing work against Jira story to determine status...",
+      );
+      const openai = new OpenAI({
+        apiKey: "ollama",
+        baseURL: process.env.OLLAMA_API_BASE || "http://127.0.0.1:11434/v1",
+      });
+
+      const prompt = `You are a project manager. Consider the following Jira ticket:
+Title: ${ticketDetails.title}
+Description: ${ticketDetails.description}
+
+And the following work summary that was just completed:
+${slackSummary}
+
+Based on this work, is the Jira ticket completely 'Done' or just 'In Progress'? 
+Reply with EXACTLY the word "Done" or "In Progress" and nothing else.`;
+
+      const res = await openai.chat.completions.create({
+        model: "qwen2.5",
+        messages: [{ role: "user", content: prompt }],
+      });
+
+      const decision = res.choices[0].message.content.trim();
+      if (decision.includes("Done")) {
+        newStatus = "Done";
+      } else if (decision.includes("In Progress")) {
+        newStatus = "In Progress";
+      }
+    }
+
+    console.log(`📝 Recommended new status: ${newStatus}\n`);
+
+    const rl3 = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+
+    const sendJiraAnswer = await new Promise((resolve) =>
+      rl3.question(
+        `❓ Do you want to update Jira ticket ${ticketId} to '${newStatus}'? (y/N) `,
+        resolve,
+      ),
+    );
+    rl3.close();
+
+    if (
+      sendJiraAnswer.trim().toLowerCase() === "y" ||
+      sendJiraAnswer.trim().toLowerCase() === "yes"
+    ) {
+      await updateJiraTicket({
+        ticketId,
+        status: newStatus,
+        comment: `Automated update from Automind.\n\nSummary of changes:\n${slackSummary}`,
+      });
+      console.log(`✅ Jira ticket ${ticketId} updated successfully.\n`);
+    } else {
+      console.log("\n🚫 Jira update skipped.\n");
+    }
+  } catch (e) {
+    console.warn(`⚠️  Failed to process Jira update: ${e.message}\n`);
+  }
 }
 
 program.parse();
