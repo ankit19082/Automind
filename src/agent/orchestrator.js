@@ -50,7 +50,7 @@ GUIDELINES:
       let response;
       try {
         response = await openai.chat.completions.create({
-          model: "qwen2.5",
+          model: process.env.OLLAMA_MODEL || "qwen2.5",
           messages,
           tools,
           tool_choice: "auto",
