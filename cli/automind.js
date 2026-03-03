@@ -217,7 +217,6 @@ program
     console.log("");
 
     // 4. Generate commit message
-    console.log("🧠 Analyzing changes...");
     let commitMessage = "";
 
     // Try Ollama (KiloCode) first
@@ -230,6 +229,7 @@ program
       commitMessage = await generateAIResponse(
         "You are an expert developer analyzing a git diff. First, mentally review the changes file-by-file to understand exactly what type of change was made in each file. Then, generate a concise git commit message based on your analysis. Use Conventional Commits format (feat:, fix:, chore:, refactor:, docs:, style:, test:). First line: a short summary (max 72 chars) using the appropriate type prefix. Then a blank line. Then 2-4 bullet points describing the specific changes made, grouping them logically if possible. Respond with ONLY the final commit message, with no extra explanation or reasoning.",
         trimmedDiff,
+        "🧠 Analyzing changes",
       );
     } catch (e) {
       console.warn(
@@ -332,7 +332,6 @@ program
         generateSlackAnswer.trim().toLowerCase() === "y" ||
         generateSlackAnswer.trim().toLowerCase() === "yes"
       ) {
-        console.log("🧠 Generating detailed summary for Slack...");
         let slackSummary = commitMessage; // fallback
 
         // Generate full summary for slack using Ollama
@@ -345,6 +344,7 @@ program
           slackSummary = await generateAIResponse(
             "You are an expert developer. Based on the provided git diff, generate a detailed summary of the changes made, suitable for a Slack notification or Pull Request description. Explain WHAT changed and WHY, in a readable, bulleted format. Do not include raw code or the actual git diff formatting, just the higher-level explanation. Keep it concise but descriptive.",
             trimmedDiff,
+            "🧠 Generating detailed summary for Slack",
           );
         } catch (e) {
           console.warn(
@@ -634,10 +634,6 @@ async function handleJiraUpdate({ commitMessage, branch, slackSummary }) {
     let newStatus = "In Progress";
 
     try {
-      console.log(
-        "🧠 Analyzing work against Jira story to determine status...",
-      );
-
       const prompt = `You are a project manager. Consider the following Jira ticket:
 Title: ${ticketDetails.title}
 Description: ${ticketDetails.description}
@@ -648,7 +644,11 @@ ${slackSummary}
 Based on this work, is the Jira ticket completely 'Done' or just 'In Progress'? 
 Reply with EXACTLY the word "Done" or "In Progress" and nothing else.`;
 
-      const decision = await generateAIResponse("", prompt);
+      const decision = await generateAIResponse(
+        "",
+        prompt,
+        "🧠 Analyzing work against Jira story to determine status",
+      );
 
       if (decision.includes("Done")) {
         newStatus = "Done";
@@ -695,24 +695,35 @@ Reply with EXACTLY the word "Done" or "In Progress" and nothing else.`;
 /**
  * Common helper to generate responses from the configured AI provider
  */
-async function generateAIResponse(systemPrompt, userPrompt) {
-  const openai = new OpenAI({
-    apiKey: "ollama",
-    baseURL: process.env.OLLAMA_API_BASE || "http://127.0.0.1:11434/v1",
-  });
+async function generateAIResponse(
+  systemPrompt,
+  userPrompt,
+  spinnerMessage = "Analyzing with AI",
+) {
+  spinner.message = spinnerMessage;
+  spinner.start();
 
-  const messages = [];
-  if (systemPrompt) {
-    messages.push({ role: "system", content: systemPrompt });
+  try {
+    const openai = new OpenAI({
+      apiKey: "ollama",
+      baseURL: process.env.OLLAMA_API_BASE || "http://127.0.0.1:11434/v1",
+    });
+
+    const messages = [];
+    if (systemPrompt) {
+      messages.push({ role: "system", content: systemPrompt });
+    }
+    messages.push({ role: "user", content: userPrompt });
+
+    const res = await openai.chat.completions.create({
+      model: "qwen2.5",
+      messages: messages,
+    });
+
+    return res.choices[0].message.content.trim();
+  } finally {
+    spinner.stop();
   }
-  messages.push({ role: "user", content: userPrompt });
-
-  const res = await openai.chat.completions.create({
-    model: "qwen2.5",
-    messages: messages,
-  });
-
-  return res.choices[0].message.content.trim();
 }
 
 program.parse();
