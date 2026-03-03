@@ -270,12 +270,36 @@ program
         }
       }
 
-      await sendSlackPushNotification({
-        slackSummary,
-        commitHash,
-        branch,
-        statusLines,
+      console.log("\n💬 Slack Summary Preview:\n");
+      console.log("   " + slackSummary.replace(/\n/g, "\n   "));
+      console.log("");
+
+      const rl2 = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
       });
+
+      const sendSlackAnswer = await new Promise((resolve) =>
+        rl2.question(
+          "❓ Do you want to send this summary to Slack? (y/N) ",
+          resolve,
+        ),
+      );
+      rl2.close();
+
+      if (
+        sendSlackAnswer.trim().toLowerCase() === "y" ||
+        sendSlackAnswer.trim().toLowerCase() === "yes"
+      ) {
+        await sendSlackPushNotification({
+          slackSummary,
+          commitHash,
+          branch,
+          statusLines,
+        });
+      } else {
+        console.log("\n🚫 Slack notification skipped.\n");
+      }
     }
   });
 
@@ -431,11 +455,7 @@ async function sendSlackPushNotification({
       .replace(/\.git$/, "");
   } catch {}
 
-  const text =
-    `🚀 *New push to \`${branch}\`* — \`${commitHash}\`\n\n` +
-    `*Changes summary:*\n${slackSummary}\n\n` +
-    `*Files changed:*\n${fileList}` +
-    (repoUrl ? `\n\n<${repoUrl}|View on GitHub>` : "");
+  const text = `*Changes summary:*\n${slackSummary}\n\n`;
 
   try {
     const res = await fetch("https://slack.com/api/chat.postMessage", {
