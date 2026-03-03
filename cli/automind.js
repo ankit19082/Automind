@@ -146,6 +146,31 @@ program
     req.end();
   });
 
+// ─── pull command ─────────────────────────────────────────────────────────────
+program
+  .command("pull")
+  .description("Pull latest changes from the remote repository")
+  .action(() => {
+    console.log("\n🤖 AutoMind Git Pull\n");
+
+    try {
+      // 1. Verify git repo
+      execSync("git rev-parse --git-dir", { stdio: "ignore" });
+
+      console.log("📥 Pulling changes...");
+      const output = execSync("git pull", { encoding: "utf-8" });
+      console.log(output);
+      console.log("✅ Pull successful.");
+    } catch (error) {
+      if (error.message.includes("Not inside a git repository")) {
+        console.error("❌ Not inside a git repository.");
+      } else {
+        console.error(`❌ Pull failed: ${error.message}`);
+      }
+      process.exit(1);
+    }
+  });
+
 // ─── push command ─────────────────────────────────────────────────────────────
 program
   .command("push")
