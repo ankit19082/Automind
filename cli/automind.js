@@ -138,12 +138,10 @@ program
             {
               role: "system",
               content:
-                "You are an expert developer. Generate a concise but highly descriptive git commit message from the provided diff. " +
+                "You are an expert developer. Generate a concise git commit message from the provided diff. " +
                 "Use Conventional Commits format (feat:, fix:, chore:, refactor:, docs:, style:, test:). " +
-                "First line: short summary (max 72 chars). Then a blank line. " +
-                "Then, provide a detailed personalized explanation of EXACTLY what changed between the previous code and the new code. " +
-                "Explain the 'why' and 'how' based on the diff, pointing out specific logic or structural differences. " +
-                "Respond with ONLY the final commit message, no extra explanation.",
+                "Return ONLY a single short summary line (max 72 characters). " +
+                "Do NOT include any detailed explanation.",
             },
             { role: "user", content: trimmedDiff },
           ],
