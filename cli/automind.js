@@ -121,20 +121,20 @@ program
     console.log("🧠 Analyzing changes...");
     let commitMessage = "";
 
-    // Try OpenAI first
-    if (
-      process.env.OPENAI_API_KEY &&
-      !process.env.OPENAI_API_KEY.includes("your_")
-    ) {
+    // Try Ollama (KiloCode) first
+    if (process.env.OLLAMA_API_BASE || true) {
       try {
-        const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+        const openai = new OpenAI({
+          apiKey: "ollama", // API key is not required for local Ollama, but the SDK requires a string
+          baseURL: "http://127.0.0.1:11434/v1",
+        });
         const trimmedDiff =
           diff.length > 8000
             ? diff.substring(0, 8000) + "\n...(truncated)"
             : diff;
 
         const res = await openai.chat.completions.create({
-          model: "gpt-4o",
+          model: "qwen2.5", // Using the model the user just pulled
           messages: [
             {
               role: "system",
