@@ -23,8 +23,7 @@ export const sendSlackMessageSchema = {
 
 export const sendSlackMessage = async ({ channel, msg }) => {
   const token = process.env.SLACK_BOT_TOKEN;
-  const targetChannel =
-    channel || process.env.SLACK_DEFAULT_CHANNEL || "#general";
+  const targetChannel = "#all-auto-mind";
 
   if (!token || token.startsWith("xoxb-your")) {
     // Simulation mode — no real token set
