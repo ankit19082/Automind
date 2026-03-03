@@ -10,6 +10,36 @@ import { writeFileSync, unlinkSync } from "fs";
 import os from "os";
 import readline from "readline";
 
+class Spinner {
+  constructor(message = "Agent is working") {
+    this.message = message;
+    this.frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    this.currentFrame = 0;
+    this.interval = null;
+  }
+
+  start() {
+    process.stdout.write("\x1B[?25l"); // Hide cursor
+    this.interval = setInterval(() => {
+      process.stdout.write(
+        `\r\x1b[36m${this.frames[this.currentFrame]}\x1b[0m ${this.message}...`,
+      );
+      this.currentFrame = (this.currentFrame + 1) % this.frames.length;
+    }, 80);
+  }
+
+  stop() {
+    if (this.interval) {
+      clearInterval(this.interval);
+      this.interval = null;
+      process.stdout.write("\r\x1B[K"); // Clear line
+      process.stdout.write("\x1B[?25h"); // Show cursor
+    }
+  }
+}
+
+const spinner = new Spinner();
+
 // Load .env from the Automind project directory
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 config({ path: path.resolve(__dirname, "../.env") });
@@ -31,7 +61,7 @@ program
     console.log(`📋 Task: "${prompt}"`);
     console.log(`🔗 Connecting to http://localhost:${PORT}...\n`);
 
-    const postData = JSON.stringify({ prompt });
+    const postData = JSON.stringify({ prompt, cwd: process.cwd() });
     const options = {
       hostname: "localhost",
       port: PORT,
@@ -49,9 +79,8 @@ program
       res.on("end", () => {
         if (res.statusCode === 201) {
           const { jobId } = JSON.parse(data);
-          console.log(
-            `✅ Task queued (Job ID: ${jobId})\n📡 Streaming agent logs...\n`,
-          );
+          console.log(`✅ Task queued (Job ID: ${jobId})`);
+          spinner.start();
           streamLogs(jobId);
         } else {
           console.error(`❌ Error submitting task: ${res.statusCode} ${data}`);
@@ -69,6 +98,51 @@ program
     });
 
     req.write(postData);
+    req.end();
+
+    // Watchdog to check if logs start within a reasonable time
+    setTimeout(() => {
+      if (spinner.interval) {
+        spinner.stop();
+        console.warn(
+          `\n⚠️  Stall detected: No logs received after 10s.\n` +
+            `   Is the worker running? Try: node src/worker.js\n` +
+            `   The agent might be taking a long time to "think" with Ollama.\n`,
+        );
+        spinner.start();
+      }
+    }, 10000);
+  });
+
+// ─── clean command ────────────────────────────────────────────────────────────
+program
+  .command("clean")
+  .description("Clear all pending/waiting tasks from the agent queue")
+  .action(async () => {
+    console.log(`\n🧹 Cleaning AutoMind Queue...`);
+    const options = {
+      hostname: "localhost",
+      port: PORT,
+      path: "/api/tasks/clean",
+      method: "POST",
+    };
+
+    const req = http.request(options, (res) => {
+      let data = "";
+      res.on("data", (chunk) => (data += chunk));
+      res.on("end", () => {
+        if (res.statusCode === 200) {
+          console.log(`✅ Queue cleared successfully.`);
+        } else {
+          console.error(`❌ Error cleaning queue: ${res.statusCode} ${data}`);
+        }
+      });
+    });
+
+    req.on("error", (e) => {
+      console.error(`\n❌ Connection Error: ${e.message}`);
+    });
+
     req.end();
   });
 
@@ -494,6 +568,7 @@ function streamLogs(jobId) {
                 const time = new Date(parsed.timestamp).toLocaleTimeString([], {
                   hour12: false,
                 });
+                spinner.stop();
                 console.log(`  [${time}] ${parsed.msg}`);
                 if (parsed.msg.includes("Task completed")) {
                   console.log("\n✅ Agent task finished!");

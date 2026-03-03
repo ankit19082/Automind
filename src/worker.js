@@ -1,8 +1,11 @@
 import { Worker } from "bullmq";
-import { connection } from "./queue/jobQueue.js";
+import { connection, cleanQueue } from "./queue/jobQueue.js";
 import { runAgentOrchestrator } from "./agent/orchestrator.js";
 
 console.log("Automind Background Worker starting...");
+
+// Clean the queue before starting to ensure a fresh state
+await cleanQueue();
 
 const worker = new Worker(
   "agentTasks",

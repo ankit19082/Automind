@@ -3,7 +3,7 @@ import { taskQueue } from "@/queue/jobQueue";
 
 export async function POST(request) {
   try {
-    const { prompt } = await request.json();
+    const { prompt, cwd } = await request.json();
 
     if (!prompt) {
       return NextResponse.json(
@@ -12,7 +12,7 @@ export async function POST(request) {
       );
     }
 
-    const job = await taskQueue.add("agentTask", { prompt });
+    const job = await taskQueue.add("agentTask", { prompt, cwd });
     return NextResponse.json(
       { jobId: job.id, message: "Task queued successfully" },
       { status: 201 },
