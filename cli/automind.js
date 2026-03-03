@@ -8,6 +8,7 @@ import path from "path";
 import { config } from "dotenv";
 import { writeFileSync, unlinkSync } from "fs";
 import os from "os";
+import readline from "readline";
 
 // Load .env from the Automind project directory
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -166,6 +167,27 @@ program
 
     if (opts.dryRun) {
       console.log("ℹ️  Dry run mode — skipping commit and push.");
+      process.exit(0);
+    }
+
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+
+    const answer = await new Promise((resolve) =>
+      rl.question(
+        "❓ Do you want to commit and push with this message? (y/N) ",
+        resolve,
+      ),
+    );
+    rl.close();
+
+    if (
+      answer.trim().toLowerCase() !== "y" &&
+      answer.trim().toLowerCase() !== "yes"
+    ) {
+      console.log("\n🚫 Commit aborted by user.\n");
       process.exit(0);
     }
 
