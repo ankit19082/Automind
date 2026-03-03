@@ -349,7 +349,7 @@ async function sendSlackPushNotification({
   statusLines,
 }) {
   const token = process.env.SLACK_BOT_TOKEN;
-  const channel = "#all-auto-mind";
+  const channel = "#general";
 
   if (!token || token.startsWith("xoxb-your")) {
     console.log("ℹ️  Slack token not set — skipping Slack notification.");
