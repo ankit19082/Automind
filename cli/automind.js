@@ -234,8 +234,44 @@ program
 
     // 8. Slack notification
     if (opts.slack !== false) {
+      console.log("🧠 Generating detailed summary for Slack...");
+      let slackSummary = commitMessage; // fallback
+
+      // Generate full summary for slack using Ollama
+      if (process.env.OLLAMA_API_BASE || true) {
+        try {
+          const openai = new OpenAI({
+            apiKey: "ollama",
+            baseURL: process.env.OLLAMA_API_BASE || "http://127.0.0.1:11434/v1",
+          });
+
+          const trimmedDiff =
+            diff.length > 8000
+              ? diff.substring(0, 8000) + "\n...(truncated)"
+              : diff;
+
+          const res = await openai.chat.completions.create({
+            model: "qwen2.5",
+            messages: [
+              {
+                role: "system",
+                content:
+                  "You are an expert developer. Based on the provided git diff, generate a detailed summary of the changes made, suitable for a Slack notification or Pull Request description. " +
+                  "Explain WHAT changed and WHY, in a readable, bulleted format. Do not include raw code or the actual git diff formatting, just the higher-level explanation. Keep it concise but descriptive.",
+              },
+              { role: "user", content: trimmedDiff },
+            ],
+          });
+          slackSummary = res.choices[0].message.content.trim();
+        } catch (e) {
+          console.warn(
+            `⚠️  Failed to generate detailed summary for Slack: ${e.message.split("\n")[0]}`,
+          );
+        }
+      }
+
       await sendSlackPushNotification({
-        commitMessage,
+        slackSummary,
         commitHash,
         branch,
         statusLines,
@@ -366,7 +402,7 @@ function buildCommitMessageFromDiff(diff) {
  * Sends a Slack notification after a successful push.
  */
 async function sendSlackPushNotification({
-  commitMessage,
+  slackSummary,
   commitHash,
   branch,
   statusLines,
@@ -379,7 +415,6 @@ async function sendSlackPushNotification({
     return;
   }
 
-  const firstLine = commitMessage.split("\n")[0];
   const fileList = statusLines
     .split("\n")
     .map((l) => `• ${l.trim()}`)
@@ -397,8 +432,8 @@ async function sendSlackPushNotification({
   } catch {}
 
   const text =
-    `🚀 *New push to \`${branch}\`* — \`${commitHash}\`\n` +
-    `> ${firstLine}\n\n` +
+    `🚀 *New push to \`${branch}\`* — \`${commitHash}\`\n\n` +
+    `*Changes summary:*\n${slackSummary}\n\n` +
     `*Files changed:*\n${fileList}` +
     (repoUrl ? `\n\n<${repoUrl}|View on GitHub>` : "");
 
