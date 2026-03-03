@@ -3,7 +3,8 @@ import { tools, executeTool } from "../tools/index.js";
 import { logEmitter } from "../events.js";
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || "dummy_key",
+  apiKey: "ollama",
+  baseURL: process.env.OLLAMA_API_BASE || "http://127.0.0.1:11434/v1",
 });
 
 // A simple in-memory task memory system
@@ -32,12 +33,9 @@ export const runAgentOrchestrator = async (job) => {
   ];
 
   try {
-    if (
-      process.env.OPENAI_API_KEY &&
-      process.env.OPENAI_API_KEY !== "dummy_key"
-    ) {
+    if (true) {
       const response = await openai.chat.completions.create({
-        model: "o4-mini",
+        model: "qwen2.5",
         messages,
         tools,
         tool_choice: "auto",
