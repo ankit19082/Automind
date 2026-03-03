@@ -138,10 +138,11 @@ program
             {
               role: "system",
               content:
-                "You are an expert developer. Generate a concise git commit message from the provided diff. " +
+                "You are an expert developer analyzing a git diff. First, mentally review the changes file-by-file to understand exactly what type of change was made in each file. " +
+                "Then, generate a concise git commit message based on your analysis. " +
                 "Use Conventional Commits format (feat:, fix:, chore:, refactor:, docs:, style:, test:). " +
-                "Return ONLY a single short summary line (max 72 characters). " +
-                "Do NOT include any detailed explanation.",
+                "First line: a short summary (max 72 chars) using the appropriate type prefix. Then a blank line. Then 2-4 bullet points describing the specific changes made, grouping them logically if possible. " +
+                "Respond with ONLY the final commit message, with no extra explanation or reasoning.",
             },
             { role: "user", content: trimmedDiff },
           ],
