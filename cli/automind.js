@@ -3,10 +3,11 @@ import { Command } from "commander";
 import http from "http";
 import { execSync } from "child_process";
 import OpenAI from "openai";
-import { createRequire } from "module";
 import { fileURLToPath } from "url";
 import path from "path";
 import { config } from "dotenv";
+import { writeFileSync, unlinkSync } from "fs";
+import os from "os";
 
 // Load .env from the Automind project directory (where this CLI lives)
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -165,7 +166,7 @@ program
       }
     }
 
-    // Fallback: generate from file list if no AI
+    // Fallback: analyze diff to generate a smart conventional commits message
     if (!commitMessage) {
       const files = execSync("git diff --staged --name-only", {
         encoding: "utf-8",
@@ -173,21 +174,47 @@ program
         .trim()
         .split("\n")
         .filter(Boolean);
-
       const fileCount = files.length;
-      const firstFile = files[0];
-      const ext = firstFile?.split(".").pop();
 
-      if (firstFile?.includes("fix") || firstFile?.includes("bug")) {
-        commitMessage = `fix: update ${fileCount} file(s) including ${firstFile}`;
-      } else if (ext === "md") {
-        commitMessage = `docs: update documentation (${fileCount} file(s))`;
-      } else {
-        commitMessage = `chore: update ${fileCount} file(s)\n\n${files
-          .slice(0, 5)
-          .map((f) => `- ${f}`)
-          .join("\n")}`;
-      }
+      // Detect change type from filenames and diff content
+      const hasFix =
+        diff.includes("fix") ||
+        diff.includes("bug") ||
+        files.some((f) => f.includes("fix"));
+      const hasDocs = files.every(
+        (f) => f.endsWith(".md") || f.endsWith(".txt"),
+      );
+      const hasTests = files.some(
+        (f) => f.includes("test") || f.includes("spec"),
+      );
+      const hasStyle = files.some((f) =>
+        [".css", ".scss", ".less"].some((ext) => f.endsWith(ext)),
+      );
+      const isNewFiles =
+        execSync("git diff --staged --diff-filter=A --name-only", {
+          encoding: "utf-8",
+        }).trim().length > 0;
+
+      // Detect affected scope from paths
+      const dirs = [
+        ...new Set(files.map((f) => f.split("/")[0]).filter((d) => d !== ".")),
+      ].slice(0, 2);
+      const scope = dirs.length ? `(${dirs.join(", ")})` : "";
+
+      let type;
+      if (hasDocs) type = "docs";
+      else if (hasTests) type = "test";
+      else if (hasStyle) type = "style";
+      else if (hasFix) type = "fix";
+      else if (isNewFiles) type = "feat";
+      else type = "refactor";
+
+      const summary = `${type}${scope}: update ${fileCount} file${fileCount > 1 ? "s" : ""}`;
+      const details = files
+        .slice(0, 8)
+        .map((f) => `- ${f}`)
+        .join("\n");
+      commitMessage = `${summary}\n\n${details}`;
     }
 
     console.log("\n📝 Commit message:\n");
@@ -199,13 +226,19 @@ program
       process.exit(0);
     }
 
-    // 5. Commit
+    // 5. Commit using a temp file to properly handle multi-line messages
+    const tmpFile = path.join(os.tmpdir(), `automind-commit-${Date.now()}.txt`);
     try {
-      execSync(`git commit -m ${JSON.stringify(commitMessage)}`, {
+      writeFileSync(tmpFile, commitMessage, "utf-8");
+      execSync(`git commit -F ${JSON.stringify(tmpFile)}`, {
         stdio: "inherit",
       });
+      unlinkSync(tmpFile);
       console.log("");
     } catch (e) {
+      try {
+        unlinkSync(tmpFile);
+      } catch {}
       console.error(`❌ Commit failed: ${e.message}`);
       process.exit(1);
     }
@@ -213,6 +246,13 @@ program
     // 6. Push
     console.log("🚀 Pushing to remote...");
     try {
+      // Check if remote is configured
+      const remotes = execSync("git remote", { encoding: "utf-8" }).trim();
+      if (!remotes) {
+        console.log("⚠️  No git remote configured. Commit was saved locally.");
+        console.log("   To push, run: git remote add origin <your-repo-url>");
+        process.exit(0);
+      }
       execSync("git push", { stdio: "inherit" });
       console.log("\n✅ Successfully pushed to remote!");
     } catch (e) {
