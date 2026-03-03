@@ -102,6 +102,7 @@ export const runAgentOrchestrator = async (job) => {
   } catch (error) {
     broadcastLog(`Agent Orchestrator Error: ${error.message}`);
     taskMemory.get(job.id).status = "failed";
+    console.log("error", error);
     throw error;
   }
 };
