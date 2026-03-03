@@ -37,7 +37,7 @@ export const runAgentOrchestrator = async (job) => {
       process.env.OPENAI_API_KEY !== "dummy_key"
     ) {
       const response = await openai.chat.completions.create({
-        model: "gpt-4o",
+        model: "o4-mini",
         messages,
         tools,
         tool_choice: "auto",
