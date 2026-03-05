@@ -343,47 +343,47 @@ async function handlePush(opts) {
     return;
   }
 
-  // 8. Slack notification
-  if (opts.slack !== false) {
-    const rlSlackPrompt = readline.createInterface({
+  // 6. Optional interactive prompt for daily client update
+  if (!opts.noSlack && commitMessage) {
+    const rlUpdatePrompt = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
     });
 
-    const generateSlackAnswer = await new Promise((resolve) =>
-      rlSlackPrompt.question(
-        "\n❓ Do you want to generate a detailed summary for Slack using AI? (y/N) ",
+    const generateUpdateAnswer = await new Promise((resolve) =>
+      rlUpdatePrompt.question(
+        "❓ Do you want to generate a daily update message for the client using AI? (y/N) ",
         resolve,
       ),
     );
-    rlSlackPrompt.close();
+    rlUpdatePrompt.close();
 
     if (
-      generateSlackAnswer.trim().toLowerCase() === "y" ||
-      generateSlackAnswer.trim().toLowerCase() === "yes"
+      generateUpdateAnswer.trim().toLowerCase() === "y" ||
+      generateUpdateAnswer.trim().toLowerCase() === "yes"
     ) {
-      let slackSummary = commitMessage; // fallback
+      let updateSummary = commitMessage; // fallback
 
-      // Generate full summary for slack using Ollama
+      // Generate full summary using AI
       try {
         const trimmedDiff =
           diff.length > 8000
             ? diff.substring(0, 8000) + "\n...(truncated)"
             : diff;
 
-        slackSummary = await generateAIResponse(
+        updateSummary = await generateAIResponse(
           "You are an expert developer communicating with a client. Based on the provided git diff, generate a professional daily update message about the work completed today. Summarize what was accomplished in this push in a clear, business-friendly, and positive tone. Focus on the progress made, features added, or issues resolved rather than technical implementation details. Use a readable, bulleted format. Do not include raw code or git diff formatting.",
           trimmedDiff,
           "🧠 Generating daily update for client",
         );
       } catch (e) {
         console.warn(
-          `⚠️  Failed to generate detailed summary for Slack: ${e.message.split("\n")[0]}`,
+          `⚠️  Failed to generate daily client update: ${e.message.split("\n")[0]}`,
         );
       }
 
-      console.log("\n💬 Slack Summary Preview:\n");
-      console.log("   " + slackSummary.replace(/\n/g, "\n   "));
+      console.log("\n💬 Daily Client Update Preview:\n");
+      console.log("   " + updateSummary.replace(/\n/g, "\n   "));
       console.log("");
 
       const rl2 = readline.createInterface({
@@ -391,32 +391,31 @@ async function handlePush(opts) {
         output: process.stdout,
       });
 
-      const sendSlackAnswer = await new Promise((resolve) =>
+      const sendUpdateAnswer = await new Promise((resolve) =>
         rl2.question(
-          "❓ Do you want to send this summary to Slack? (y/N) ",
+          "❓ Do you want to send this update to the predefined Slack channel? (y/N) ",
           resolve,
         ),
       );
       rl2.close();
 
       if (
-        sendSlackAnswer.trim().toLowerCase() === "y" ||
-        sendSlackAnswer.trim().toLowerCase() === "yes"
+        sendUpdateAnswer.trim().toLowerCase() === "y" ||
+        sendUpdateAnswer.trim().toLowerCase() === "yes"
       ) {
-        await sendSlackPushNotification({
-          slackSummary,
-          commitHash,
-          branch,
-          statusLines,
-        });
+        await sendSlackNotification(updateSummary);
+        console.log("✅ Message sent to Slack.\n");
       } else {
-        console.log("\n🚫 Slack notification skipped.\n");
+        console.log("\n🚫 Sending skipped.\n");
       }
 
-      await handleJiraUpdate({ commitMessage, branch, slackSummary });
+      await handleJiraUpdate({
+        commitMessage,
+        branch,
+        slackSummary: updateSummary,
+      });
     } else {
-      console.log("\n🚫 Slack summary generation skipped.\n");
-      // Still check Jira even if Slack is skipped, using standard commit message
+      console.log("\n🚫 Client update generation skipped.\n");
       await handleJiraUpdate({
         commitMessage,
         branch,
