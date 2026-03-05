@@ -151,16 +151,16 @@ Output nothing else but the JSON object.`;
       console.log(`[JIRA] AI determined status: ${aiDeterminedStatus}`);
 
       // // Construct dynamic comment based on AI evaluation
-      // let autoComment = `Automated evaluation from Automind.\n\nSummary of changes:\n${comment || "No explicit comment provided."}`;
+      let autoComment = `Automated evaluation from Automind.\n\nSummary of changes:\n${comment || "No explicit comment provided."}`;
 
-      // if (aiDeterminedStatus === "In Progress" && remainingItems.length > 0) {
-      //   autoComment += `\n\nAI determined that the following requirements are still remaining or incomplete:\n${remainingItems.map((item) => `- ${item}`).join("\n")}`;
-      // } else if (aiDeterminedStatus === "Human-Review") {
-      //   autoComment += `\n\nAI determined that the ticket requirements appear to be fully met.`;
-      // }
+      if (aiDeterminedStatus === "In Progress" && remainingItems.length > 0) {
+        autoComment += `\n\nAI determined that the following requirements are still remaining or incomplete:\n${remainingItems.map((item) => `- ${item}`).join("\n")}`;
+      } else if (aiDeterminedStatus === "Human-Review") {
+        autoComment += `\n\nAI determined that the ticket requirements appear to be fully met.`;
+      }
 
-      // // Reassign 'comment' argument to the newly constructed message
-      // comment = autoComment;
+      // Reassign 'comment' argument to the newly constructed message
+      comment = autoComment;
     } else {
       console.warn(
         `[JIRA] AI returned unexpected status: ${aiStatus}. Proceeding with original status.`,
