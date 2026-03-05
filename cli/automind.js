@@ -9,6 +9,7 @@ import { config } from "dotenv";
 import { writeFileSync, unlinkSync } from "fs";
 import os from "os";
 import readline from "readline";
+import { getJiraTicket } from "../src/tools/jira.js";
 
 class Spinner {
   constructor(message = "Agent is working") {
@@ -146,6 +147,16 @@ program
     req.end();
   });
 
+// ─── jira command ─────────────────────────────────────────────────────────────
+program
+  .command("jira <ticketId>")
+  .description("Update Jira ticket status")
+  .action(async (ticketId) => {
+    console.log("\n🤖 AutoMind Jira Update\n");
+    console.log(`Updating Jira ticket ${ticketId}`);
+    const ticket = await getJiraTicket(ticketId);
+    console.log(ticket);
+  });
 // ─── pull command ─────────────────────────────────────────────────────────────
 program
   .command("pull")
@@ -708,12 +719,16 @@ async function generateAIResponse(
       apiKey: "ollama",
       baseURL: process.env.OLLAMA_API_BASE || "http://127.0.0.1:11434/v1",
     });
+    const codex = new Codex();
+    const thread = codex.startThread();
 
-    const messages = [];
+    let messages = [];
     if (systemPrompt) {
-      messages.push({ role: "system", content: systemPrompt });
+      messages = await thread.run(systemPrompt);
+      // messages.push({ role: "system", content: systemPrompt });
     }
-    messages.push({ role: "user", content: userPrompt });
+    // messages.push({ role: "user", content: userPrompt });
+    messages = await thread.run(userPrompt);
 
     const res = await openai.chat.completions.create({
       model: "qwen2.5",
