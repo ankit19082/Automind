@@ -3,7 +3,6 @@ import { Command } from "commander";
 import http from "http";
 import { execSync } from "child_process";
 import { Codex } from "@openai/codex-sdk";
-import OpenAI from "openai";
 import { fileURLToPath } from "url";
 import path from "path";
 import { config } from "dotenv";
@@ -239,7 +238,7 @@ program
           : diff;
 
       commitMessage = await generateAIResponse(
-        "You are an expert developer analyzing a git diff. First, mentally review the changes file-by-file to understand exactly what type of change was made in each file. Then, generate a concise git commit message based on your analysis. Use Conventional Commits format (feat:, fix:, chore:, refactor:, docs:, style:, test:). Always generate the commit message in clear, professional English. First line: a short summary (max 72 chars) using the appropriate type prefix. Then a blank line. Then 2-4 bullet points describing the specific changes made, grouping them logically if possible. Respond with ONLY the final commit message, with no extra explanation or reasoning.",
+        "You are an expert developer analyzing a git diff. First, mentally review the changes file-by-file to understand exactly what type of change was made in each file. Then, generate a concise git commit message based on your analysis. Always generate the commit message in clear, professional English. First line: a short summary (max 72 chars) using the appropriate type prefix. Then a blank line. Then 2-4 bullet points describing the specific changes made, grouping them logically if possible. Respond with ONLY the final commit message, with no extra explanation or reasoning.",
         trimmedDiff,
         "🧠 Analyzing changes",
       );
