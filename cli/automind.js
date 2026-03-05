@@ -413,6 +413,7 @@ async function handlePush(opts) {
         commitMessage,
         branch,
         slackSummary: updateSummary,
+        diff,
       });
     } else {
       console.log("\n🚫 Client update generation skipped.\n");
@@ -420,6 +421,7 @@ async function handlePush(opts) {
         commitMessage,
         branch,
         slackSummary: commitMessage,
+        diff,
       });
     }
   }
@@ -713,7 +715,7 @@ function streamLogs(jobId) {
 /**
  * Automates Jira status mapping
  */
-async function handleJiraUpdate({ commitMessage, branch, slackSummary }) {
+async function handleJiraUpdate({ commitMessage, branch, slackSummary, diff }) {
   console.log("\n🧠 Checking for Jira tickets to update...");
 
   // 1. Check for credentials and prompt if missing/placeholders
@@ -861,6 +863,7 @@ async function handleJiraUpdate({ commitMessage, branch, slackSummary }) {
         ticketId,
         status: newStatus,
         comment: `Automated update from Automind.\n\nSummary of changes:\n${slackSummary}`,
+        diff,
       });
       console.log(`✅ Jira ticket ${ticketId} updated successfully.\n`);
     } else {

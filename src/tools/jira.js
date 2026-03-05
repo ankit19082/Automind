@@ -65,7 +65,7 @@ export const getJiraTicket = async (ticketId) => {
   };
 };
 
-export const updateJiraTicket = async ({ ticketId, status, comment }) => {
+export const updateJiraTicket = async ({ ticketId, status, comment, diff }) => {
   const baseUrl = process.env.JIRA_BASE_URL;
   const email = process.env.JIRA_EMAIL;
   const apiToken = process.env.JIRA_API_TOKEN;
@@ -85,50 +85,55 @@ export const updateJiraTicket = async ({ ticketId, status, comment }) => {
   let aiDeterminedStatus = status;
 
   try {
-    if (comment) {
-      console.log(`[JIRA] Fetching ticket ${ticketId} for AI evaluation...`);
-      const ticketDetails = await getJiraTicket(ticketId);
+    console.log(`[JIRA] Fetching ticket ${ticketId} for AI evaluation...`);
+    const ticketDetails = await getJiraTicket(ticketId);
 
-      console.log(
-        `[JIRA] Asking AI to evaluate if functionality is complete...`,
-      );
-      const anthropic = new Anthropic({
-        apiKey: process.env.ANTHROPIC_AUTH_TOKEN,
-        baseURL: process.env.ANTHROPIC_BASE_URL,
-      });
+    console.log(`[JIRA] Asking AI to evaluate if functionality is complete...`);
+    const anthropic = new Anthropic({
+      apiKey: process.env.ANTHROPIC_AUTH_TOKEN,
+      baseURL: process.env.ANTHROPIC_BASE_URL,
+    });
 
-      const prompt = `You are a technical project manager. 
+    const truncatedDiff = diff
+      ? diff.length > 10000
+        ? diff.substring(0, 10000) + "\n...(truncated)"
+        : diff
+      : "No direct file changes provided.";
+
+    const prompt = `You are a technical project manager. 
 Ticket Summary: ${ticketDetails.title}
 Ticket Description: ${ticketDetails.description}
 
 Comment describing changes/implementation:
 ${comment}
 
-Check if the content functionality described in the ticket is completely done based on the changes.
+Actual file changes (diff):
+${truncatedDiff}
+
+Check if the content functionality described in the ticket is completely done based on the actual file changes and comment.
 If it is fully done, respond with exactly "Human-Review" (without quotes).
-If there is still something remaining according to the functionality, respond with exactly "In-Progress" (without quotes).
+If there is still something remaining according to the functionality, respond with exactly "In Progress" (without quotes).
 Do not output anything else.`;
 
-      const response = await anthropic.messages.create({
-        model: process.env.ANTHROPIC_MODEL || "claude-3-5-sonnet-20241022",
-        max_tokens: 50,
-        messages: [{ role: "user", content: prompt }],
-      });
+    const response = await anthropic.messages.create({
+      model: process.env.ANTHROPIC_MODEL || "claude-3-5-sonnet-20241022",
+      max_tokens: 50,
+      messages: [{ role: "user", content: prompt }],
+    });
 
-      const aiStatus = response.content[0].text.trim();
-      if (
-        aiStatus === "Human-Review" ||
-        aiStatus === "Humun-Review" ||
-        aiStatus === "In-Progress"
-      ) {
-        aiDeterminedStatus =
-          aiStatus === "Humun-Review" ? "Human-Review" : aiStatus;
-        console.log(`[JIRA] AI determined status: ${aiDeterminedStatus}`);
-      } else {
-        console.warn(
-          `[JIRA] AI returned unexpected status: ${aiStatus}. Proceeding with original status.`,
-        );
-      }
+    const aiStatus = response.content[0].text.trim();
+    if (
+      aiStatus === "Human-Review" ||
+      aiStatus === "Humun-Review" ||
+      aiStatus === "In Progress"
+    ) {
+      aiDeterminedStatus =
+        aiStatus === "Humun-Review" ? "Human-Review" : aiStatus;
+      console.log(`[JIRA] AI determined status: ${aiDeterminedStatus}`);
+    } else {
+      console.warn(
+        `[JIRA] AI returned unexpected status: ${aiStatus}. Proceeding with original status.`,
+      );
     }
   } catch (aiError) {
     console.error(
