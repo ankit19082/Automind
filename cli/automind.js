@@ -47,7 +47,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 config({ path: path.resolve(__dirname, "../.env") });
 
 const program = new Command();
-const PORT = parseInt(process.env.AUTOMIND_PORT || "3000");
+const PORT = parseInt(process.env.AUTOMIND_PORT || process.env.PORT || "3001");
 
 program
   .name("automind")

@@ -2,11 +2,6 @@ import Anthropic from "@anthropic-ai/sdk";
 import { tools, executeTool } from "../tools/index.js";
 import { logEmitter } from "../events.js";
 
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_AUTH_TOKEN,
-  baseURL: process.env.ANTHROPIC_BASE_URL,
-});
-
 // A simple in-memory task memory system
 const taskMemory = new Map();
 
@@ -44,6 +39,11 @@ GUIDELINES:
 2.  **Context Awareness**: Understand the current code patterns and folder structures before introducing new files or modifications.
 3.  **Action**: Once you have sufficient context, perform the requested task using the appropriate tools.
 4.  **CWD**: All paths should be relative to the current working directory provided above.`;
+
+  const anthropic = new Anthropic({
+    apiKey: process.env.ANTHROPIC_AUTH_TOKEN,
+    baseURL: process.env.ANTHROPIC_BASE_URL,
+  });
 
   try {
     let iterations = 0;

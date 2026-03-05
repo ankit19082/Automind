@@ -1,4 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
+import readline from "readline";
+import http from "http";
 
 export const updateJiraTicketSchema = {
   name: "update_jira_ticket",
@@ -123,11 +125,24 @@ Output nothing else but the JSON object.`;
 
     const response = await anthropic.messages.create({
       model: process.env.ANTHROPIC_MODEL || "claude-3-5-sonnet-20241022",
-      max_tokens: 50,
+      max_tokens: 500,
       messages: [{ role: "user", content: prompt }],
     });
 
-    const aiResponseText = response.content[0].text.trim();
+    let aiResponseText = response.content[0].text.trim();
+    // Strip markdown formatting if AI wrapped it in ```json
+    if (aiResponseText.startsWith("```json")) {
+      aiResponseText = aiResponseText
+        .replace(/^```json\n?/, "")
+        .replace(/\n?```$/, "")
+        .trim();
+    } else if (aiResponseText.startsWith("```")) {
+      aiResponseText = aiResponseText
+        .replace(/^```\n?/, "")
+        .replace(/\n?```$/, "")
+        .trim();
+    }
+
     let aiResult;
     try {
       aiResult = JSON.parse(aiResponseText);
@@ -150,17 +165,82 @@ Output nothing else but the JSON object.`;
         aiStatus === "Humun-Review" ? "Human-Review" : aiStatus;
       console.log(`[JIRA] AI determined status: ${aiDeterminedStatus}`);
 
-      // // Construct dynamic comment based on AI evaluation
-      let autoComment = `Automated evaluation from Automind.\n\nSummary of changes:\n${comment || "No explicit comment provided."}`;
+      // Construct dynamic comment based on AI evaluation
+      // let autoComment = `Automated evaluation from Automind.\n\nSummary of changes:\n${comment || "No explicit comment provided."}`;
 
       if (aiDeterminedStatus === "In Progress" && remainingItems.length > 0) {
-        autoComment += `\n\nAI determined that the following requirements are still remaining or incomplete:\n${remainingItems.map((item) => `- ${item}`).join("\n")}`;
-      } else if (aiDeterminedStatus === "Human-Review") {
-        autoComment += `\n\nAI determined that the ticket requirements appear to be fully met.`;
-      }
+        console.log(
+          `\n\n⚠️ AI determined that the following requirements are still remaining or incomplete:\n${remainingItems.map((item) => `- ${item}`).join("\n")}`,
+        );
 
-      // Reassign 'comment' argument to the newly constructed message
-      comment = autoComment;
+        // Prompt the user to let Automind finish the work
+        const rl = readline.createInterface({
+          input: process.stdin,
+          output: process.stdout,
+        });
+
+        const finishWorkAnswer = await new Promise((resolve) =>
+          rl.question(
+            "\n❓ Would you like the AutoMind Agent to attempt to complete these remaining requirements right now? (y/N) ",
+            resolve,
+          ),
+        );
+        rl.close();
+
+        if (
+          finishWorkAnswer.trim().toLowerCase() === "y" ||
+          finishWorkAnswer.trim().toLowerCase() === "yes"
+        ) {
+          console.log("\n🚀 Generating task for AutoMind Agent...");
+          const agentTaskPrompt = `Based on the Jira ticket '${ticketDetails.title}', please implement the following missing requirements:\n${remainingItems.map((item) => `- ${item}`).join("\n")}`;
+
+          const postData = JSON.stringify({
+            prompt: agentTaskPrompt,
+            cwd: process.cwd(),
+          });
+
+          const resolvedPort = parseInt(
+            process.env.PORT || process.env.AUTOMIND_PORT || "3001",
+          );
+
+          const options = {
+            hostname: "localhost",
+            port: resolvedPort,
+            path: "/api/tasks",
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Content-Length": Buffer.byteLength(postData),
+            },
+          };
+
+          const req = http.request(options, (res) => {
+            let data = "";
+            res.on("data", (chunk) => (data += chunk));
+            res.on("end", () => {
+              if (res.statusCode === 201) {
+                const { jobId } = JSON.parse(data);
+                console.log(
+                  `✅ AutoMind Task queued successfully (Job ID: ${jobId}). You can check the agent logs to monitor its progress!`,
+                );
+              } else {
+                console.error(
+                  `❌ Error submitting Automind task: ${res.statusCode} ${data}`,
+                );
+              }
+            });
+          });
+
+          req.on("error", (e) => {
+            console.error(
+              `\n❌ Failed to connect to AutoMind server to submit the follow-up task. Is the server running? (${e.message})`,
+            );
+          });
+
+          req.write(postData);
+          req.end();
+        }
+      }
     } else {
       console.warn(
         `[JIRA] AI returned unexpected status: ${aiStatus}. Proceeding with original status.`,
