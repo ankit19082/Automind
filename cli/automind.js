@@ -6,10 +6,10 @@ import { Codex } from "@openai/codex-sdk";
 import { fileURLToPath } from "url";
 import path from "path";
 import { config } from "dotenv";
-import { writeFileSync, unlinkSync } from "fs";
+import { writeFileSync, readFileSync, unlinkSync, existsSync } from "fs";
 import os from "os";
 import readline from "readline";
-import { getJiraTicket } from "../src/tools/jira.js";
+import { getJiraTicket, updateJiraTicket } from "../src/tools/jira.js";
 
 class Spinner {
   constructor(message = "Agent is working") {
@@ -624,53 +624,106 @@ function streamLogs(jobId) {
 async function handleJiraUpdate({ commitMessage, branch, slackSummary }) {
   console.log("\n🧠 Checking for Jira tickets to update...");
 
-  // Try to find PROJ-123 in branch or commitMessage
+  // 1. Check for credentials and prompt if missing/placeholders
+  const jiraEnvVars = {
+    JIRA_BASE_URL: process.env.JIRA_BASE_URL,
+    JIRA_EMAIL: process.env.JIRA_EMAIL,
+    JIRA_API_TOKEN: process.env.JIRA_API_TOKEN,
+  };
+
+  const isPlaceholder = (val, key) =>
+    !val ||
+    val.includes("your-org") ||
+    val.includes("your_jira_email") ||
+    val.includes("your_jira_api_token");
+
+  const missingVars = Object.keys(jiraEnvVars).filter((key) =>
+    isPlaceholder(jiraEnvVars[key], key),
+  );
+
+  if (missingVars.length > 0) {
+    console.log(
+      "⚠️  JIRA credentials are missing or placeholders in .env file.",
+    );
+    const rlCreds = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+
+    for (const key of missingVars) {
+      const value = await new Promise((resolve) =>
+        rlCreds.question(`❓ Enter your ${key}: `, resolve),
+      );
+      process.env[key] = value.trim();
+
+      // Basic persistence to .env
+      const envPath = path.resolve(__dirname, "../.env");
+      try {
+        let content = "";
+        if (existsSync(envPath)) {
+          content = readFileSync(envPath, "utf-8");
+        }
+
+        const regex = new RegExp(`^${key}=.*$`, "m");
+        if (regex.test(content)) {
+          content = content.replace(regex, `${key}=${value.trim()}`);
+        } else {
+          content +=
+            (content.length > 0 && !content.endsWith("\n") ? "\n" : "") +
+            `${key}=${value.trim()}\n`;
+        }
+        writeFileSync(envPath, content, "utf-8");
+      } catch (e) {
+        console.warn(`⚠️  Failed to update .env for ${key}: ${e.message}`);
+      }
+    }
+    rlCreds.close();
+    console.log("✅ Credentials updated (temporarily and in .env).\n");
+  }
+
+  // 2. Try to find PROJ-123 in branch or commitMessage
   const textToSearch = [branch, commitMessage].filter(Boolean).join(" ");
-  const jiraMatch = textToSearch.match(/[A-Z]+-\d+/i);
+  let jiraMatch = textToSearch.match(/[A-Z]+-\d+/i);
+  let ticketId;
 
   if (!jiraMatch) {
     console.log(
-      "ℹ️  No Jira ticket ID found in branch name or commit message.\n",
+      "ℹ️  No Jira ticket ID found in branch name or commit message.",
     );
+    const rlTicket = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+    const manualTicket = await new Promise((resolve) =>
+      rlTicket.question(
+        "❓ Enter the Scrum Number (Jira Ticket ID): ",
+        resolve,
+      ),
+    );
+    rlTicket.close();
+
+    if (manualTicket.trim()) {
+      ticketId = manualTicket.trim().toUpperCase();
+    }
+  } else {
+    ticketId = jiraMatch[0].toUpperCase();
+  }
+
+  if (!ticketId) {
+    console.log("🚫 No JIRA ticket ID provided. Skipping JIRA update.\n");
     return;
   }
 
-  const ticketId = jiraMatch[0].toUpperCase();
-  console.log(`🔗 Found Jira ticket: ${ticketId}`);
+  console.log(`🔗 Target Jira ticket: ${ticketId}`);
 
   try {
     const ticketDetails = await getJiraTicket(ticketId);
     console.log(`📋 Ticket Title: ${ticketDetails.title}`);
 
-    let newStatus = "In Progress";
+    // Default status for this workflow is "Human-Review"
+    let newStatus = "Human-Review";
 
-    try {
-      const prompt = `You are a project manager. Consider the following Jira ticket:
-Title: ${ticketDetails.title}
-Description: ${ticketDetails.description}
-
-And the following work summary that was just completed:
-${slackSummary}
-
-Based on this work, is the Jira ticket completely 'Done' or just 'In Progress'? 
-Reply with EXACTLY the word "Done" or "In Progress" and nothing else.`;
-
-      const decision = await generateAIResponse(
-        "",
-        prompt,
-        "🧠 Analyzing work against Jira story to determine status",
-      );
-
-      if (decision.includes("Done")) {
-        newStatus = "Done";
-      } else if (decision.includes("In Progress")) {
-        newStatus = "In Progress";
-      }
-    } catch (e) {
-      console.warn(`⚠️  AI analysis failed: ${e.message.split("\n")[0]}`);
-    }
-
-    console.log(`📝 Recommended new status: ${newStatus}\n`);
+    console.log(`📝 Target status: ${newStatus}\n`);
 
     const rl3 = readline.createInterface({
       input: process.stdin,
