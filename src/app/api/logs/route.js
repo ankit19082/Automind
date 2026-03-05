@@ -10,15 +10,25 @@ export async function GET(request, { params }) {
 
   const stream = new ReadableStream({
     start(controller) {
-      const onLog = (eventJobId, logMsg) => {
-        if (String(eventJobId) === String(jobId)) {
-          controller.enqueue(
-            `data: ${JSON.stringify({ timestamp: Date.now(), msg: logMsg })}\n\n`,
-          );
-        }
-      };
+      const cleanup = logEmitter.subscribe(
+        jobId,
+        (msgJobId, logMsg, data = {}) => {
+          const payload = {
+            timestamp: Date.now(),
+            msg:
+              typeof logMsg === "string"
+                ? logMsg
+                : "Log message object received",
+            ...data,
+          };
+          // If logMsg is an object with a msg property, use it
+          if (typeof logMsg === "object" && logMsg.msg) {
+            payload.msg = logMsg.msg;
+          }
 
-      logEmitter.on("log", onLog);
+          controller.enqueue(`data: ${JSON.stringify(payload)}\n\n`);
+        },
+      );
 
       // Keep connection alive
       const intervalId = setInterval(() => {
@@ -26,7 +36,7 @@ export async function GET(request, { params }) {
       }, 15000);
 
       request.signal.addEventListener("abort", () => {
-        logEmitter.off("log", onLog);
+        cleanup();
         clearInterval(intervalId);
         controller.close();
       });

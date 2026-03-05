@@ -9,6 +9,7 @@ import { config } from "dotenv";
 import { writeFileSync, readFileSync, unlinkSync, existsSync } from "fs";
 import os from "os";
 import readline from "readline";
+import Anthropic from "@anthropic-ai/sdk";
 import { getJiraTicket, updateJiraTicket } from "../src/tools/jira.js";
 
 class Spinner {
@@ -108,7 +109,7 @@ program
         console.warn(
           `\n⚠️  Stall detected: No logs received after 10s.\n` +
             `   Is the worker running? Try: node src/worker.js\n` +
-            `   The agent might be taking a long time to "think" with Ollama.\n`,
+            `   The agent might be taking a long time to "think" with Anthropic.\n`,
         );
         spinner.start();
       }
@@ -186,226 +187,244 @@ program
 program
   .command("push")
   .description("Auto-generate commit message from staged changes and push")
+  .description("Analyzes changes, commits, and pushes to remote")
   .option("--dry-run", "Show the commit message without actually committing")
   .option("--no-slack", "Skip Slack notification after push")
+  .option("--cwd <path>", "Working directory for the git operations")
   .action(async (opts) => {
-    console.log("\n🤖 AutoMind Git Push\n");
+    await handlePush(opts);
+  });
 
-    // 1. Verify git repo
-    try {
-      execSync("git rev-parse --git-dir", { stdio: "ignore" });
-    } catch {
-      console.error("❌ Not inside a git repository.");
-      process.exit(1);
-    }
+async function handlePush(opts) {
+  const workingDir = opts.cwd || process.cwd();
+  console.log(`\n🤖 AutoMind Git Push (Dir: ${workingDir})\n`);
 
-    // 2. Stage all if nothing explicitly staged
-    let diff = execSync("git diff --staged", { encoding: "utf-8" });
-    if (!diff.trim()) {
-      console.log(
-        "ℹ️  No staged changes found. Staging all modified/new files...",
-      );
-      execSync("git add .", { stdio: "inherit" });
-      diff = execSync("git diff --staged", { encoding: "utf-8" });
-    }
+  // 1. Verify git repo
+  try {
+    execSync("git rev-parse --git-dir", { stdio: "ignore", cwd: workingDir });
+  } catch {
+    console.error("❌ Not inside a git repository.");
+    return;
+  }
 
-    if (!diff.trim()) {
-      console.log("✅ Nothing to commit. Working tree is clean.");
-      process.exit(0);
-    }
-
-    // 3. Show summary of staged files
-    const statusLines = execSync("git status --short", {
-      encoding: "utf-8",
-    }).trim();
-    console.log("📁 Staged changes:");
+  // 2. Stage all if nothing explicitly staged
+  let diff = execSync("git diff --staged", {
+    encoding: "utf-8",
+    cwd: workingDir,
+  });
+  if (!diff.trim()) {
     console.log(
-      statusLines
-        .split("\n")
-        .map((l) => `   ${l}`)
-        .join("\n"),
+      "ℹ️  No staged changes found. Staging all modified/new files...",
     );
+    execSync("git add .", { stdio: "inherit", cwd: workingDir });
+    diff = execSync("git diff --staged", {
+      encoding: "utf-8",
+      cwd: workingDir,
+    });
+  }
+
+  if (!diff.trim()) {
+    console.log("✅ Nothing to commit. Working tree is clean.");
+    process.exit(0);
+  }
+
+  // 3. Show summary of staged files
+  const statusLines = execSync("git status --short", {
+    encoding: "utf-8",
+    cwd: workingDir,
+  }).trim();
+  console.log("📁 Staged changes:");
+  console.log(
+    statusLines
+      .split("\n")
+      .map((l) => `   ${l}`)
+      .join("\n"),
+  );
+  console.log("");
+
+  // 4. Generate commit message
+  let commitMessage = "";
+
+  // Try Ollama (KiloCode) first
+  try {
+    const trimmedDiff =
+      diff.length > 8000 ? diff.substring(0, 8000) + "\n...(truncated)" : diff;
+
+    commitMessage = await generateAIResponse(
+      "You are an expert developer analyzing a git diff. First, mentally review the changes file-by-file to understand exactly what type of change was made in each file. Then, generate a concise git commit message based on your analysis. Always generate the commit message in clear, professional English. First line: a short summary (max 72 chars) using the appropriate type prefix. Then a blank line. Then 2-4 bullet points describing the specific changes made, grouping them logically if possible. Respond with ONLY the final commit message, with no extra explanation or reasoning.",
+      trimmedDiff,
+      "🧠 Analyzing changes",
+    );
+  } catch (e) {
+    console.warn(
+      `⚠️  AI error, using smart fallback: ${e.message.split("\n")[0]}`,
+    );
+  }
+
+  // Smart fallback: parse the actual diff content
+  if (!commitMessage) {
+    commitMessage = buildCommitMessageFromDiff(diff);
+  }
+
+  console.log("\n📝 Commit message:\n");
+  console.log("   " + commitMessage.replace(/\n/g, "\n   "));
+  console.log("");
+
+  if (opts.dryRun) {
+    console.log("ℹ️  Dry run mode — skipping commit and push.");
+    process.exit(0);
+  }
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  const answer = await new Promise((resolve) =>
+    rl.question(
+      "❓ Do you want to commit and push with this message? (y/N) ",
+      resolve,
+    ),
+  );
+  rl.close();
+
+  if (
+    answer.trim().toLowerCase() !== "y" &&
+    answer.trim().toLowerCase() !== "yes"
+  ) {
+    console.log("\n🚫 Commit aborted by user.\n");
+    process.exit(0);
+  }
+
+  // 5. Commit using temp file (preserves multi-line messages perfectly)
+  const tmpFile = path.join(os.tmpdir(), `automind-commit-${Date.now()}.txt`);
+  try {
+    writeFileSync(tmpFile, commitMessage, "utf-8");
+    execSync(`git commit -F ${JSON.stringify(tmpFile)}`, {
+      stdio: "inherit",
+      cwd: workingDir,
+    });
+    unlinkSync(tmpFile);
     console.log("");
-
-    // 4. Generate commit message
-    let commitMessage = "";
-
-    // Try Ollama (KiloCode) first
+  } catch (e) {
     try {
-      const trimmedDiff =
-        diff.length > 8000
-          ? diff.substring(0, 8000) + "\n...(truncated)"
-          : diff;
+      unlinkSync(tmpFile);
+    } catch {}
+    console.error(`❌ Commit failed: ${e.message}`);
+    return;
+  }
 
-      commitMessage = await generateAIResponse(
-        "You are an expert developer analyzing a git diff. First, mentally review the changes file-by-file to understand exactly what type of change was made in each file. Then, generate a concise git commit message based on your analysis. Always generate the commit message in clear, professional English. First line: a short summary (max 72 chars) using the appropriate type prefix. Then a blank line. Then 2-4 bullet points describing the specific changes made, grouping them logically if possible. Respond with ONLY the final commit message, with no extra explanation or reasoning.",
-        trimmedDiff,
-        "🧠 Analyzing changes",
-      );
-    } catch (e) {
-      console.warn(
-        `⚠️  AI error, using smart fallback: ${e.message.split("\n")[0]}`,
-      );
+  // 6. Get commit hash for Slack notification
+  const commitHash = execSync("git rev-parse --short HEAD", {
+    encoding: "utf-8",
+    cwd: workingDir,
+  }).trim();
+  const branch = execSync("git rev-parse --abbrev-ref HEAD", {
+    encoding: "utf-8",
+    cwd: workingDir,
+  }).trim();
+
+  // 7. Push to remote
+  console.log("🚀 Pushing to remote...");
+  try {
+    const remotes = execSync("git remote", {
+      encoding: "utf-8",
+      cwd: workingDir,
+    }).trim();
+    if (!remotes) {
+      console.log("⚠️  No git remote configured. Commit was saved locally.");
+      console.log("   To push: git remote add origin <your-repo-url>");
+      return;
     }
+    execSync("git push", { stdio: "inherit", cwd: workingDir });
+    console.log("\n✅ Successfully pushed to remote!");
+  } catch (e) {
+    console.error(`❌ Push failed: ${e.message}`);
+    return;
+  }
 
-    // Smart fallback: parse the actual diff content
-    if (!commitMessage) {
-      commitMessage = buildCommitMessageFromDiff(diff);
-    }
-
-    console.log("\n📝 Commit message:\n");
-    console.log("   " + commitMessage.replace(/\n/g, "\n   "));
-    console.log("");
-
-    if (opts.dryRun) {
-      console.log("ℹ️  Dry run mode — skipping commit and push.");
-      process.exit(0);
-    }
-
-    const rl = readline.createInterface({
+  // 8. Slack notification
+  if (opts.slack !== false) {
+    const rlSlackPrompt = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
     });
 
-    const answer = await new Promise((resolve) =>
-      rl.question(
-        "❓ Do you want to commit and push with this message? (y/N) ",
+    const generateSlackAnswer = await new Promise((resolve) =>
+      rlSlackPrompt.question(
+        "\n❓ Do you want to generate a detailed summary for Slack using AI? (y/N) ",
         resolve,
       ),
     );
-    rl.close();
+    rlSlackPrompt.close();
 
     if (
-      answer.trim().toLowerCase() !== "y" &&
-      answer.trim().toLowerCase() !== "yes"
+      generateSlackAnswer.trim().toLowerCase() === "y" ||
+      generateSlackAnswer.trim().toLowerCase() === "yes"
     ) {
-      console.log("\n🚫 Commit aborted by user.\n");
-      process.exit(0);
-    }
+      let slackSummary = commitMessage; // fallback
 
-    // 5. Commit using temp file (preserves multi-line messages perfectly)
-    const tmpFile = path.join(os.tmpdir(), `automind-commit-${Date.now()}.txt`);
-    try {
-      writeFileSync(tmpFile, commitMessage, "utf-8");
-      execSync(`git commit -F ${JSON.stringify(tmpFile)}`, {
-        stdio: "inherit",
-      });
-      unlinkSync(tmpFile);
-      console.log("");
-    } catch (e) {
+      // Generate full summary for slack using Ollama
       try {
-        unlinkSync(tmpFile);
-      } catch {}
-      console.error(`❌ Commit failed: ${e.message}`);
-      process.exit(1);
-    }
+        const trimmedDiff =
+          diff.length > 8000
+            ? diff.substring(0, 8000) + "\n...(truncated)"
+            : diff;
 
-    // 6. Get commit hash for Slack notification
-    const commitHash = execSync("git rev-parse --short HEAD", {
-      encoding: "utf-8",
-    }).trim();
-    const branch = execSync("git rev-parse --abbrev-ref HEAD", {
-      encoding: "utf-8",
-    }).trim();
-
-    // 7. Push to remote
-    console.log("🚀 Pushing to remote...");
-    try {
-      const remotes = execSync("git remote", { encoding: "utf-8" }).trim();
-      if (!remotes) {
-        console.log("⚠️  No git remote configured. Commit was saved locally.");
-        console.log("   To push: git remote add origin <your-repo-url>");
-        process.exit(0);
+        slackSummary = await generateAIResponse(
+          "You are an expert developer communicating with a client. Based on the provided git diff, generate a professional daily update message about the work completed today. Summarize what was accomplished in this push in a clear, business-friendly, and positive tone. Focus on the progress made, features added, or issues resolved rather than technical implementation details. Use a readable, bulleted format. Do not include raw code or git diff formatting.",
+          trimmedDiff,
+          "🧠 Generating daily update for client",
+        );
+      } catch (e) {
+        console.warn(
+          `⚠️  Failed to generate detailed summary for Slack: ${e.message.split("\n")[0]}`,
+        );
       }
-      execSync("git push", { stdio: "inherit" });
-      console.log("\n✅ Successfully pushed to remote!");
-    } catch (e) {
-      console.error(`❌ Push failed: ${e.message}`);
-      process.exit(1);
-    }
 
-    // 8. Slack notification
-    if (opts.slack !== false) {
-      const rlSlackPrompt = readline.createInterface({
+      console.log("\n💬 Slack Summary Preview:\n");
+      console.log("   " + slackSummary.replace(/\n/g, "\n   "));
+      console.log("");
+
+      const rl2 = readline.createInterface({
         input: process.stdin,
         output: process.stdout,
       });
 
-      const generateSlackAnswer = await new Promise((resolve) =>
-        rlSlackPrompt.question(
-          "\n❓ Do you want to generate a detailed summary for Slack using AI? (y/N) ",
+      const sendSlackAnswer = await new Promise((resolve) =>
+        rl2.question(
+          "❓ Do you want to send this summary to Slack? (y/N) ",
           resolve,
         ),
       );
-      rlSlackPrompt.close();
+      rl2.close();
 
       if (
-        generateSlackAnswer.trim().toLowerCase() === "y" ||
-        generateSlackAnswer.trim().toLowerCase() === "yes"
+        sendSlackAnswer.trim().toLowerCase() === "y" ||
+        sendSlackAnswer.trim().toLowerCase() === "yes"
       ) {
-        let slackSummary = commitMessage; // fallback
-
-        // Generate full summary for slack using Ollama
-        try {
-          const trimmedDiff =
-            diff.length > 8000
-              ? diff.substring(0, 8000) + "\n...(truncated)"
-              : diff;
-
-          slackSummary = await generateAIResponse(
-            "You are an expert developer communicating with a client. Based on the provided git diff, generate a professional daily update message about the work completed today. Summarize what was accomplished in this push in a clear, business-friendly, and positive tone. Focus on the progress made, features added, or issues resolved rather than technical implementation details. Use a readable, bulleted format. Do not include raw code or git diff formatting.",
-            trimmedDiff,
-            "🧠 Generating daily update for client",
-          );
-        } catch (e) {
-          console.warn(
-            `⚠️  Failed to generate detailed summary for Slack: ${e.message.split("\n")[0]}`,
-          );
-        }
-
-        console.log("\n💬 Slack Summary Preview:\n");
-        console.log("   " + slackSummary.replace(/\n/g, "\n   "));
-        console.log("");
-
-        const rl2 = readline.createInterface({
-          input: process.stdin,
-          output: process.stdout,
-        });
-
-        const sendSlackAnswer = await new Promise((resolve) =>
-          rl2.question(
-            "❓ Do you want to send this summary to Slack? (y/N) ",
-            resolve,
-          ),
-        );
-        rl2.close();
-
-        if (
-          sendSlackAnswer.trim().toLowerCase() === "y" ||
-          sendSlackAnswer.trim().toLowerCase() === "yes"
-        ) {
-          await sendSlackPushNotification({
-            slackSummary,
-            commitHash,
-            branch,
-            statusLines,
-          });
-        } else {
-          console.log("\n🚫 Slack notification skipped.\n");
-        }
-
-        await handleJiraUpdate({ commitMessage, branch, slackSummary });
-      } else {
-        console.log("\n🚫 Slack summary generation skipped.\n");
-        // Still check Jira even if Slack is skipped, using standard commit message
-        await handleJiraUpdate({
-          commitMessage,
+        await sendSlackPushNotification({
+          slackSummary,
+          commitHash,
           branch,
-          slackSummary: commitMessage,
+          statusLines,
         });
+      } else {
+        console.log("\n🚫 Slack notification skipped.\n");
       }
+
+      await handleJiraUpdate({ commitMessage, branch, slackSummary });
+    } else {
+      console.log("\n🚫 Slack summary generation skipped.\n");
+      // Still check Jira even if Slack is skipped, using standard commit message
+      await handleJiraUpdate({
+        commitMessage,
+        branch,
+        slackSummary: commitMessage,
+      });
     }
-  });
+  }
+}
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -588,7 +607,7 @@ function streamLogs(jobId) {
   const url = `http://localhost:${PORT}/api/logs?jobId=${jobId}`;
   http
     .get(url, (res) => {
-      res.on("data", (chunk) => {
+      res.on("data", async (chunk) => {
         const messages = chunk.toString().split("\n\n");
         for (const message of messages) {
           if (message.startsWith("data: ")) {
@@ -602,6 +621,80 @@ function streamLogs(jobId) {
                 console.log(`  [${time}] ${parsed.msg}`);
                 if (parsed.msg.includes("Task completed")) {
                   console.log("\n✅ Agent task finished!");
+
+                  // Check if there are modified files to push
+                  if (
+                    parsed.memory &&
+                    parsed.memory.modifiedFiles &&
+                    parsed.memory.modifiedFiles.length > 0
+                  ) {
+                    const jobCwd = parsed.memory.cwd || process.cwd();
+                    spinner.stop();
+                    console.log("\n📁 The agent modified the following files:");
+                    parsed.memory.modifiedFiles.forEach((f) =>
+                      console.log(`   • ${f}`),
+                    );
+
+                    console.log("\n🔍 Reviewing changes...");
+                    try {
+                      // Show diff for the modified files
+                      const filesArg = parsed.memory.modifiedFiles
+                        .map((f) => JSON.stringify(f))
+                        .join(" ");
+                      const diffOutput = execSync(
+                        `git diff --color ${filesArg}`,
+                        {
+                          encoding: "utf-8",
+                          cwd: jobCwd,
+                        },
+                      );
+                      if (diffOutput.trim()) {
+                        console.log("\n" + diffOutput);
+                      } else {
+                        console.log(
+                          "ℹ️  No unstaged changes found (files might be identical to original).",
+                        );
+                      }
+                    } catch (e) {
+                      console.warn(`⚠️  Could not show diff: ${e.message}`);
+                    }
+
+                    const rlPush = readline.createInterface({
+                      input: process.stdin,
+                      output: process.stdout,
+                    });
+
+                    const answer = await new Promise((resolve) =>
+                      rlPush.question(
+                        "\n❓ Review the changes above. Is everything fine? (y/N) ",
+                        resolve,
+                      ),
+                    );
+                    rlPush.close();
+
+                    if (
+                      answer.trim().toLowerCase() === "y" ||
+                      answer.trim().toLowerCase() === "yes"
+                    ) {
+                      console.log("\n📥 Staging files...");
+                      for (const file of parsed.memory.modifiedFiles) {
+                        try {
+                          execSync(`git add ${JSON.stringify(file)}`, {
+                            stdio: "inherit",
+                            cwd: jobCwd,
+                          });
+                        } catch (e) {
+                          console.warn(
+                            `⚠️  Failed to stage ${file}: ${e.message}`,
+                          );
+                        }
+                      }
+
+                      // Trigger the push command logic
+                      console.log("\n🚀 Starting push workflow...");
+                      await handlePush({ cwd: jobCwd });
+                    }
+                  }
                   process.exit(0);
                 }
               }
@@ -681,6 +774,29 @@ async function handleJiraUpdate({ commitMessage, branch, slackSummary }) {
     console.log("✅ Credentials updated (temporarily and in .env).\n");
   }
 
+  const rlJiraPrompt = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  const updateJiraAnswer = await new Promise((resolve) =>
+    rlJiraPrompt.question(
+      "\n❓ Do you want to update a Jira ticket for this task? (y/N) ",
+      resolve,
+    ),
+  );
+  rlJiraPrompt.close();
+
+  if (
+    updateJiraAnswer.trim().toLowerCase() !== "y" &&
+    updateJiraAnswer.trim().toLowerCase() !== "yes"
+  ) {
+    console.log("🚫 Jira update skipped.\n");
+    return;
+  }
+
+  console.log("\n🧠 Checking for Jira tickets to update...");
+
   // 2. Try to find PROJ-123 in branch or commitMessage
   const textToSearch = [branch, commitMessage].filter(Boolean).join(" ");
   let jiraMatch = textToSearch.match(/[A-Z]+-\d+/i);
@@ -756,9 +872,6 @@ async function handleJiraUpdate({ commitMessage, branch, slackSummary }) {
   }
 }
 
-/**
- * Common helper to generate responses from the configured AI provider
- */
 async function generateAIResponse(
   systemPrompt,
   userPrompt,
@@ -768,15 +881,26 @@ async function generateAIResponse(
   spinner.start();
 
   try {
-    const codex = new Codex();
-    const thread = codex.startThread();
+    const anthropic = new Anthropic({
+      apiKey: process.env.ANTHROPIC_AUTH_TOKEN,
+      baseURL: process.env.ANTHROPIC_BASE_URL,
+    });
 
-    const prompt = systemPrompt
-      ? `${systemPrompt}\n\nTask:\n${userPrompt}`
-      : userPrompt;
-    const turn = await thread.run(prompt);
+    const response = await anthropic.messages.create({
+      model: process.env.ANTHROPIC_MODEL || "claude-3-5-sonnet-20241022",
+      max_tokens: 1024,
+      system: systemPrompt,
+      messages: [{ role: "user", content: userPrompt }],
+    });
 
-    return turn.finalResponse ? turn.finalResponse.trim() : "";
+    return response.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join("\n")
+      .trim();
+  } catch (e) {
+    console.error(`\n❌ AI Response Error: ${e.message}`);
+    return "";
   } finally {
     spinner.stop();
   }
