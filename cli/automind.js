@@ -2,6 +2,7 @@
 import { Command } from "commander";
 import http from "http";
 import { execSync } from "child_process";
+import { Codex } from "@openai/codex-sdk";
 import OpenAI from "openai";
 import { fileURLToPath } from "url";
 import path from "path";
