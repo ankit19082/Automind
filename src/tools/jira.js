@@ -111,9 +111,15 @@ Actual file changes (diff):
 ${truncatedDiff}
 
 Check if the content functionality described in the ticket is completely done based on the actual file changes and comment.
-If it is fully done, respond with exactly "Human-Review" (without quotes).
-If there is still something remaining according to the functionality, respond with exactly "In Progress" (without quotes).
-Do not output anything else.`;
+Respond strictly in JSON format with the following structure:
+{
+  "status": "Human-Review" | "In Progress",
+  "remaining": ["List of things still remaining or missing based on the ticket description, if any"]
+}
+
+If it is fully done, respond with "status": "Human-Review" and an empty array for "remaining".
+If there is still something remaining according to the functionality, respond with "status": "In Progress" and list the missing things in the "remaining" array.
+Output nothing else but the JSON object.`;
 
     const response = await anthropic.messages.create({
       model: process.env.ANTHROPIC_MODEL || "claude-3-5-sonnet-20241022",
@@ -121,7 +127,20 @@ Do not output anything else.`;
       messages: [{ role: "user", content: prompt }],
     });
 
-    const aiStatus = response.content[0].text.trim();
+    const aiResponseText = response.content[0].text.trim();
+    let aiResult;
+    try {
+      aiResult = JSON.parse(aiResponseText);
+    } catch (parseError) {
+      console.warn(
+        `[JIRA] Failed to parse AI JSON response. Falling back. Response: ${aiResponseText}`,
+      );
+      throw new Error("Invalid AI JSON response");
+    }
+
+    const aiStatus = aiResult.status;
+    const remainingItems = aiResult.remaining || [];
+
     if (
       aiStatus === "Human-Review" ||
       aiStatus === "Humun-Review" ||
@@ -130,6 +149,18 @@ Do not output anything else.`;
       aiDeterminedStatus =
         aiStatus === "Humun-Review" ? "Human-Review" : aiStatus;
       console.log(`[JIRA] AI determined status: ${aiDeterminedStatus}`);
+
+      // // Construct dynamic comment based on AI evaluation
+      // let autoComment = `Automated evaluation from Automind.\n\nSummary of changes:\n${comment || "No explicit comment provided."}`;
+
+      // if (aiDeterminedStatus === "In Progress" && remainingItems.length > 0) {
+      //   autoComment += `\n\nAI determined that the following requirements are still remaining or incomplete:\n${remainingItems.map((item) => `- ${item}`).join("\n")}`;
+      // } else if (aiDeterminedStatus === "Human-Review") {
+      //   autoComment += `\n\nAI determined that the ticket requirements appear to be fully met.`;
+      // }
+
+      // // Reassign 'comment' argument to the newly constructed message
+      // comment = autoComment;
     } else {
       console.warn(
         `[JIRA] AI returned unexpected status: ${aiStatus}. Proceeding with original status.`,

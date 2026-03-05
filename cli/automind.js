@@ -862,7 +862,6 @@ async function handleJiraUpdate({ commitMessage, branch, slackSummary, diff }) {
       await updateJiraTicket({
         ticketId,
         status: newStatus,
-        comment: `Automated update from Automind.\n\nSummary of changes:\n${slackSummary}`,
         diff,
       });
       console.log(`✅ Jira ticket ${ticketId} updated successfully.\n`);
