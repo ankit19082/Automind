@@ -32,18 +32,16 @@ export const getJiraTicket = async (ticketId) => {
     );
   }
 
-  const response = await fetch(
-    `${baseUrl}/rest/api/2/issue/${ticketId}?fields=summary,description,status`,
-    {
-      headers: {
-        Authorization: `Basic ${Buffer.from(`${email}:${apiToken}`).toString(
-          "base64",
-        )}`,
-        Accept: "application/json",
-      },
+  const response = await fetch(`${baseUrl}/rest/api/2/issue/${ticketId}`, {
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${email}:${apiToken}`).toString(
+        "base64",
+      )}`,
+      Accept: "application/json",
     },
-  );
+  });
 
+  console.log(response);
   if (!response.ok) {
     throw new Error(
       `Failed to fetch Jira ticket ${ticketId}: ${response.status} ${response.statusText}`,

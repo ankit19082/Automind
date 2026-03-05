@@ -716,27 +716,15 @@ async function generateAIResponse(
   spinner.start();
 
   try {
-    const openai = new OpenAI({
-      apiKey: "ollama",
-      baseURL: process.env.OLLAMA_API_BASE || "http://127.0.0.1:11434/v1",
-    });
     const codex = new Codex();
     const thread = codex.startThread();
 
-    let messages = [];
-    if (systemPrompt) {
-      messages = await thread.run(systemPrompt);
-      // messages.push({ role: "system", content: systemPrompt });
-    }
-    // messages.push({ role: "user", content: userPrompt });
-    messages = await thread.run(userPrompt);
+    const prompt = systemPrompt
+      ? `${systemPrompt}\n\nTask:\n${userPrompt}`
+      : userPrompt;
+    const turn = await thread.run(prompt);
 
-    const res = await openai.chat.completions.create({
-      model: "qwen2.5",
-      messages: messages,
-    });
-
-    return res.choices[0].message.content.trim();
+    return turn.finalResponse ? turn.finalResponse.trim() : "";
   } finally {
     spinner.stop();
   }
