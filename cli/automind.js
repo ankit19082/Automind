@@ -353,9 +353,9 @@ program
               : diff;
 
           slackSummary = await generateAIResponse(
-            "You are an expert developer. Based on the provided git diff, generate a detailed summary of the changes made, suitable for a Slack notification or Pull Request description. Explain WHAT changed and WHY, in a readable, bulleted format. Do not include raw code or the actual git diff formatting, just the higher-level explanation. Keep it concise but descriptive.",
+            "You are an expert developer communicating with a client. Based on the provided git diff, generate a professional daily update message about the work completed today. Summarize what was accomplished in this push in a clear, business-friendly, and positive tone. Focus on the progress made, features added, or issues resolved rather than technical implementation details. Use a readable, bulleted format. Do not include raw code or git diff formatting.",
             trimmedDiff,
-            "🧠 Generating detailed summary for Slack",
+            "🧠 Generating daily update for client",
           );
         } catch (e) {
           console.warn(
