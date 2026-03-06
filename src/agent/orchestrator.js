@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { tools, executeTool } from "../tools/index.js";
 import { logEmitter } from "../events.js";
+import { updateJiraTicket } from "../tools/jira.js";
 
 // A simple in-memory task memory system
 const taskMemory = new Map();
@@ -13,7 +14,7 @@ const anthropicTools = tools.map((t) => ({
 }));
 
 export const runAgentOrchestrator = async (job) => {
-  const { prompt, cwd } = job.data;
+  const { prompt, cwd, jiraTicketId } = job.data;
 
   const broadcastLog = (msg, data = {}) => {
     console.log(`[Job ${job.id}] ${msg}`);
@@ -145,6 +146,27 @@ GUIDELINES:
         cwd: cwd || process.cwd(),
       },
     });
+
+    if (jiraTicketId) {
+      broadcastLog(
+        `[JIRA] Automatically updating ticket ${jiraTicketId} to 'Human-Review'...`,
+      );
+      try {
+        await updateJiraTicket({
+          ticketId: jiraTicketId,
+          status: "Human-Review",
+          comment: "AutoMind Agent has completed the task automatically.",
+          skipAIEvaluation: true,
+        });
+        broadcastLog(
+          `[JIRA] Successfully updated ${jiraTicketId} to 'Human-Review'.`,
+        );
+      } catch (jiraErr) {
+        broadcastLog(
+          `[JIRA] Failed to update ticket status: ${jiraErr.message}`,
+        );
+      }
+    }
 
     return {
       success: true,

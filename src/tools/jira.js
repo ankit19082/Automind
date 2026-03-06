@@ -14,7 +14,8 @@ export const updateJiraTicketSchema = {
       },
       status: {
         type: "string",
-        description: "The new status for the ticket (e.g., Done, In Progress)",
+        description:
+          "The new status for the ticket (e.g., Done, In Progress, Human-Review)",
       },
       comment: {
         type: "string",
@@ -22,6 +23,22 @@ export const updateJiraTicketSchema = {
       },
     },
     required: ["ticketId"],
+  },
+};
+
+export const searchJiraTicketsSchema = {
+  name: "search_jira_tickets",
+  description: "Searches for Jira tickets using a JQL query.",
+  parameters: {
+    type: "object",
+    properties: {
+      jql: {
+        type: "string",
+        description:
+          "The JQL query string (e.g., 'assignee = currentUser() AND status = \"In Progress\"')",
+      },
+    },
+    required: ["jql"],
   },
 };
 
@@ -36,7 +53,7 @@ export const getJiraTicket = async (ticketId) => {
     );
   }
 
-  const response = await fetch(`${baseUrl}/rest/api/2/issue/${ticketId}`, {
+  const response = await fetch(`${baseUrl}/rest/api/3/issue/${ticketId}`, {
     headers: {
       Authorization: `Basic ${Buffer.from(`${email}:${apiToken}`).toString(
         "base64",
@@ -67,7 +84,54 @@ export const getJiraTicket = async (ticketId) => {
   };
 };
 
-export const updateJiraTicket = async ({ ticketId, status, comment, diff }) => {
+export const searchJiraTickets = async ({ jql }) => {
+  const baseUrl = process.env.JIRA_BASE_URL;
+  const email = process.env.JIRA_EMAIL;
+  const apiToken = process.env.JIRA_API_TOKEN;
+
+  if (!baseUrl || !email || !apiToken) {
+    throw new Error(
+      "Missing JIRA environment variables (JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN)",
+    );
+  }
+
+  const response = await fetch(
+    `${baseUrl}/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}`,
+    {
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${email}:${apiToken}`).toString(
+          "base64",
+        )}`,
+        Accept: "application/json",
+      },
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      `Failed to search Jira tickets: ${response.status} ${response.statusText}`,
+    );
+  }
+
+  const data = await response.json();
+  return (data.issues || []).map((issue) => ({
+    id: issue.key,
+    title: issue.fields?.summary,
+    status: issue.fields?.status?.name,
+    description:
+      typeof issue.fields?.description === "string"
+        ? issue.fields.description
+        : JSON.stringify(issue.fields?.description),
+  }));
+};
+
+export const updateJiraTicket = async ({
+  ticketId,
+  status,
+  comment,
+  diff,
+  skipAIEvaluation = false,
+}) => {
   const baseUrl = process.env.JIRA_BASE_URL;
   const email = process.env.JIRA_EMAIL;
   const apiToken = process.env.JIRA_API_TOKEN;
@@ -86,23 +150,30 @@ export const updateJiraTicket = async ({ ticketId, status, comment, diff }) => {
 
   let aiDeterminedStatus = status;
 
-  try {
-    console.log(`[JIRA] Fetching ticket ${ticketId} for AI evaluation...`);
-    const ticketDetails = await getJiraTicket(ticketId);
+  if (skipAIEvaluation) {
+    console.log(
+      `[JIRA] Skipping AI evaluation for ticket ${ticketId}. Using status: ${status}`,
+    );
+  } else {
+    try {
+      console.log(`[JIRA] Fetching ticket ${ticketId} for AI evaluation...`);
+      const ticketDetails = await getJiraTicket(ticketId);
 
-    console.log(`[JIRA] Asking AI to evaluate if functionality is complete...`);
-    const anthropic = new Anthropic({
-      apiKey: process.env.ANTHROPIC_AUTH_TOKEN,
-      baseURL: process.env.ANTHROPIC_BASE_URL,
-    });
+      console.log(
+        `[JIRA] Asking AI to evaluate if functionality is complete...`,
+      );
+      const anthropic = new Anthropic({
+        apiKey: process.env.ANTHROPIC_AUTH_TOKEN,
+        baseURL: process.env.ANTHROPIC_BASE_URL,
+      });
 
-    const truncatedDiff = diff
-      ? diff.length > 10000
-        ? diff.substring(0, 10000) + "\n...(truncated)"
-        : diff
-      : "No direct file changes provided.";
+      const truncatedDiff = diff
+        ? diff.length > 10000
+          ? diff.substring(0, 10000) + "\n...(truncated)"
+          : diff
+        : "No direct file changes provided.";
 
-    const prompt = `You are a technical project manager. 
+      const prompt = `You are a technical project manager. 
 Ticket Summary: ${ticketDetails.title}
 Ticket Description: ${ticketDetails.description}
 
@@ -123,140 +194,141 @@ If it is fully done, respond with "status": "Human-Review" and an empty array fo
 If there is still something remaining according to the functionality, respond with "status": "In Progress" and list the missing things in the "remaining" array.
 Output nothing else but the JSON object.`;
 
-    const response = await anthropic.messages.create({
-      model: process.env.ANTHROPIC_MODEL || "claude-3-5-sonnet-20241022",
-      max_tokens: 500,
-      messages: [{ role: "user", content: prompt }],
-    });
+      const response = await anthropic.messages.create({
+        model: process.env.ANTHROPIC_MODEL || "claude-3-5-sonnet-20241022",
+        max_tokens: 500,
+        messages: [{ role: "user", content: prompt }],
+      });
 
-    let aiResponseText = response.content[0].text.trim();
-    // Strip markdown formatting if AI wrapped it in ```json
-    if (aiResponseText.startsWith("```json")) {
-      aiResponseText = aiResponseText
-        .replace(/^```json\n?/, "")
-        .replace(/\n?```$/, "")
-        .trim();
-    } else if (aiResponseText.startsWith("```")) {
-      aiResponseText = aiResponseText
-        .replace(/^```\n?/, "")
-        .replace(/\n?```$/, "")
-        .trim();
-    }
+      let aiResponseText = response.content[0].text.trim();
+      // Strip markdown formatting if AI wrapped it in ```json
+      if (aiResponseText.startsWith("```json")) {
+        aiResponseText = aiResponseText
+          .replace(/^```json\n?/, "")
+          .replace(/\n?```$/, "")
+          .trim();
+      } else if (aiResponseText.startsWith("```")) {
+        aiResponseText = aiResponseText
+          .replace(/^```\n?/, "")
+          .replace(/\n?```$/, "")
+          .trim();
+      }
 
-    let aiResult;
-    try {
-      aiResult = JSON.parse(aiResponseText);
-    } catch (parseError) {
-      console.warn(
-        `[JIRA] Failed to parse AI JSON response. Falling back. Response: ${aiResponseText}`,
-      );
-      throw new Error("Invalid AI JSON response");
-    }
-
-    const aiStatus = aiResult.status;
-    const remainingItems = aiResult.remaining || [];
-
-    if (
-      aiStatus === "Human-Review" ||
-      aiStatus === "Humun-Review" ||
-      aiStatus === "In Progress"
-    ) {
-      aiDeterminedStatus =
-        aiStatus === "Humun-Review" ? "Human-Review" : aiStatus;
-      console.log(`[JIRA] AI determined status: ${aiDeterminedStatus}`);
-
-      // Construct dynamic comment based on AI evaluation
-      // let autoComment = `Automated evaluation from Automind.\n\nSummary of changes:\n${comment || "No explicit comment provided."}`;
-
-      if (aiDeterminedStatus === "In Progress" && remainingItems.length > 0) {
-        console.log(
-          `\n\n⚠️ AI determined that the following requirements are still remaining or incomplete:\n${remainingItems.map((item) => `- ${item}`).join("\n")}`,
+      let aiResult;
+      try {
+        aiResult = JSON.parse(aiResponseText);
+      } catch (parseError) {
+        console.warn(
+          `[JIRA] Failed to parse AI JSON response. Falling back. Response: ${aiResponseText}`,
         );
+        throw new Error("Invalid AI JSON response");
+      }
 
-        // Prompt the user to let Automind finish the work
-        const rl = readline.createInterface({
-          input: process.stdin,
-          output: process.stdout,
-        });
+      const aiStatus = aiResult.status;
+      const remainingItems = aiResult.remaining || [];
 
-        const finishWorkAnswer = await new Promise((resolve) =>
-          rl.question(
-            "\n❓ Would you like the AutoMind Agent to attempt to complete these remaining requirements right now? (y/N) ",
-            resolve,
-          ),
-        );
-        rl.close();
+      if (
+        aiStatus === "Human-Review" ||
+        aiStatus === "Humun-Review" ||
+        aiStatus === "In Progress"
+      ) {
+        aiDeterminedStatus =
+          aiStatus === "Humun-Review" ? "Human-Review" : aiStatus;
+        console.log(`[JIRA] AI determined status: ${aiDeterminedStatus}`);
 
-        if (
-          finishWorkAnswer.trim().toLowerCase() === "y" ||
-          finishWorkAnswer.trim().toLowerCase() === "yes"
-        ) {
-          console.log("\n🚀 Generating task for AutoMind Agent...");
-          const agentTaskPrompt = `Based on the Jira ticket '${ticketDetails.title}', please implement the following missing requirements:\n${remainingItems.map((item) => `- ${item}`).join("\n")}`;
+        // Construct dynamic comment based on AI evaluation
+        // let autoComment = `Automated evaluation from Automind.\n\nSummary of changes:\n${comment || "No explicit comment provided."}`;
 
-          const postData = JSON.stringify({
-            prompt: agentTaskPrompt,
-            cwd: process.cwd(),
-          });
-
-          const resolvedPort = parseInt(
-            process.env.PORT || process.env.AUTOMIND_PORT || "3001",
+        if (aiDeterminedStatus === "In Progress" && remainingItems.length > 0) {
+          console.log(
+            `\n\n⚠️ AI determined that the following requirements are still remaining or incomplete:\n${remainingItems.map((item) => `- ${item}`).join("\n")}`,
           );
 
-          const options = {
-            hostname: "localhost",
-            port: resolvedPort,
-            path: "/api/tasks",
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Content-Length": Buffer.byteLength(postData),
-            },
-          };
+          // Prompt the user to let Automind finish the work
+          const rl = readline.createInterface({
+            input: process.stdin,
+            output: process.stdout,
+          });
 
-          const req = http.request(options, (res) => {
-            let data = "";
-            res.on("data", (chunk) => (data += chunk));
-            res.on("end", () => {
-              if (res.statusCode === 201) {
-                const { jobId } = JSON.parse(data);
-                console.log(
-                  `✅ AutoMind Task queued successfully (Job ID: ${jobId}). You can check the agent logs to monitor its progress!`,
-                );
-              } else {
-                console.error(
-                  `❌ Error submitting Automind task: ${res.statusCode} ${data}`,
-                );
-              }
+          const finishWorkAnswer = await new Promise((resolve) =>
+            rl.question(
+              "\n❓ Would you like the AutoMind Agent to attempt to complete these remaining requirements right now? (y/N) ",
+              resolve,
+            ),
+          );
+          rl.close();
+
+          if (
+            finishWorkAnswer.trim().toLowerCase() === "y" ||
+            finishWorkAnswer.trim().toLowerCase() === "yes"
+          ) {
+            console.log("\n🚀 Generating task for AutoMind Agent...");
+            const agentTaskPrompt = `Based on the Jira ticket '${ticketDetails.title}', please implement the following missing requirements:\n${remainingItems.map((item) => `- ${item}`).join("\n")}`;
+
+            const postData = JSON.stringify({
+              prompt: agentTaskPrompt,
+              cwd: process.cwd(),
             });
-          });
 
-          req.on("error", (e) => {
-            console.error(
-              `\n❌ Failed to connect to AutoMind server to submit the follow-up task. Is the server running? (${e.message})`,
+            const resolvedPort = parseInt(
+              process.env.PORT || process.env.AUTOMIND_PORT || "3001",
             );
-          });
 
-          req.write(postData);
-          req.end();
+            const options = {
+              hostname: "localhost",
+              port: resolvedPort,
+              path: "/api/tasks",
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Content-Length": Buffer.byteLength(postData),
+              },
+            };
+
+            const req = http.request(options, (res) => {
+              let data = "";
+              res.on("data", (chunk) => (data += chunk));
+              res.on("end", () => {
+                if (res.statusCode === 201) {
+                  const { jobId } = JSON.parse(data);
+                  console.log(
+                    `✅ AutoMind Task queued successfully (Job ID: ${jobId}). You can check the agent logs to monitor its progress!`,
+                  );
+                } else {
+                  console.error(
+                    `❌ Error submitting Automind task: ${res.statusCode} ${data}`,
+                  );
+                }
+              });
+            });
+
+            req.on("error", (e) => {
+              console.error(
+                `\n❌ Failed to connect to AutoMind server to submit the follow-up task. Is the server running? (${e.message})`,
+              );
+            });
+
+            req.write(postData);
+            req.end();
+          }
         }
+      } else {
+        console.warn(
+          `[JIRA] AI returned unexpected status: ${aiStatus}. Proceeding with original status.`,
+        );
       }
-    } else {
-      console.warn(
-        `[JIRA] AI returned unexpected status: ${aiStatus}. Proceeding with original status.`,
+    } catch (aiError) {
+      console.error(
+        `[JIRA] AI status check failed: ${aiError.message}. Using original status.`,
       );
     }
-  } catch (aiError) {
-    console.error(
-      `[JIRA] AI status check failed: ${aiError.message}. Using original status.`,
-    );
   }
 
   try {
     // 1. Transition the status if provided
     if (aiDeterminedStatus) {
       const transitionsRes = await fetch(
-        `${baseUrl}/rest/api/2/issue/${ticketId}/transitions`,
+        `${baseUrl}/rest/api/3/issue/${ticketId}/transitions`,
         { headers },
       );
       if (transitionsRes.ok) {
@@ -270,7 +342,7 @@ Output nothing else but the JSON object.`;
 
         if (transition) {
           const transitionRes = await fetch(
-            `${baseUrl}/rest/api/2/issue/${ticketId}/transitions`,
+            `${baseUrl}/rest/api/3/issue/${ticketId}/transitions`,
             {
               method: "POST",
               headers,
@@ -298,7 +370,7 @@ Output nothing else but the JSON object.`;
     // 2. Add comment if provided
     if (comment) {
       const commentRes = await fetch(
-        `${baseUrl}/rest/api/2/issue/${ticketId}/comment`,
+        `${baseUrl}/rest/api/3/issue/${ticketId}/comment`,
         {
           method: "POST",
           headers,

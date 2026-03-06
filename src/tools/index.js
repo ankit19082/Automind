@@ -1,6 +1,11 @@
 import { fetchCommitsSchema, fetchCommits } from "./github.js";
 import { sendSlackMessageSchema, sendSlackMessage } from "./slack.js";
-import { updateJiraTicketSchema, updateJiraTicket } from "./jira.js";
+import {
+  updateJiraTicketSchema,
+  updateJiraTicket,
+  searchJiraTicketsSchema,
+  searchJiraTickets,
+} from "./jira.js";
 import {
   writeFileSchema,
   writeFile,
@@ -14,6 +19,7 @@ export const tools = [
   { type: "function", function: fetchCommitsSchema },
   { type: "function", function: sendSlackMessageSchema },
   { type: "function", function: updateJiraTicketSchema },
+  { type: "function", function: searchJiraTicketsSchema },
   { type: "function", function: writeFileSchema },
   { type: "function", function: readFileSchema },
   { type: "function", function: listDirSchema },
@@ -29,6 +35,8 @@ export const executeTool = async (name, argsRaw) => {
       return sendSlackMessage(args);
     case "update_jira_ticket":
       return updateJiraTicket(args);
+    case "search_jira_tickets":
+      return searchJiraTickets(args);
     case "write_file":
       return writeFile(args);
     case "read_file":

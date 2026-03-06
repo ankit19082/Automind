@@ -1,6 +1,7 @@
 import { Worker } from "bullmq";
 import { connection, cleanQueue } from "./queue/jobQueue.js";
 import { runAgentOrchestrator } from "./agent/orchestrator.js";
+import { JiraMonitor } from "./services/jiraMonitor.js";
 
 console.log("Automind Background Worker starting...");
 
@@ -14,6 +15,10 @@ const worker = new Worker(
   },
   { connection },
 );
+
+// Start JIRA Monitor
+const jiraMonitor = new JiraMonitor();
+jiraMonitor.start();
 
 worker.on("completed", (job) => {
   console.log(`Worker: Job ${job.id} has completed!`);
